@@ -2,6 +2,7 @@
 #include <stdlib.h>
 //#include <pthread.h>
 #include <time.h>
+#include <string.h>
 #include "ftl.h"
 
 /* B58R TLC
@@ -41,86 +42,91 @@ Flash Geomerty B17A
        program page -> erase block
 */
 
-#define NUM_WRITES 10000
+typedef struct {
+    unsigned int logicalPage; //LBA
+    unsigned char *data; //Write Data
+    unsigned int length; // length in LBA
+} WriteCommand;
 
-int main(int argc, char **argv)
-{       
+#define NUM_WRITES 1000
+// #define DATA_SIZE 4 // 每一個 page 存放的 user data 為 4 bytes
+// #define MAX_LBA_LENGTH 4 // 每次 command 傳送的 LBA 大小是 4 個 page
+
+// 隨機產生擁有 length 長度的 Byte 資料
+void generateRandomDataforCmd(unsigned char *data, unsigned char length) {
+    for (unsigned int i = 0; i < length; i++) {
+        srand(time(NULL));
+        data[i] = rand() % 0xFF;
+    }
+    return;
+}
+
+int main(int argc, char **argv) {       
     // Initial FTL and related flow.
     initializeFTL();
-    srand(time(NULL));
-
+    
     // pthread_t write_thread;
     // pthread_t status_thread;
 
-    unsigned int writeLBARange = TOTAL_BLOCKS * PAGES_PER_BLOCK * OP_SIZE;
+    // 以 OP Size 來限制 LBA 寫入的 Range
+    unsigned int writeLogicalPageAddressRange = TOTAL_BLOCKS * PAGES_PER_BLOCK * OP_SIZE;
 
-    for (unsigned int i = 0; i < NUM_WRITES; i++)
-    {
-        WriteCommand cmd;        
-        cmd.logicalPage = rand() % (writeLBARange);
-        writeData(cmd.logicalPage);
+    // 寫入 NUM_WRITES 次數
+    // 1. 每 100 次 print 一次狀態，並寫 P2L Table 的檔案
+    // 2. 每次寫完後 read data (L2P -> P2L -> check P2L's lba -> check P2L's data)
+    for (unsigned int i = 0; i < NUM_WRITES; i++) {
+        WriteCommand cmd;
+        srand(time(NULL));
+        
+        cmd.logicalPage = rand() % (writeLogicalPageAddressRange);
+        cmd.length = 1; // rand() % (MAX_LBA_LENGTH) + 1;
+        cmd.data = (unsigned char *)malloc(cmd.length);
+        generateRandomDataforCmd(cmd.data, cmd.length);
+        
+        // Write Data to Flash
+        writeDataToFlash(cmd.logicalPage, cmd.length, cmd.data);
 
-        // unsigned char* data = (unsigned char*)malloc(PAGE_SIZE);
-        // for (unsigned int j = 0; j < PAGE_SIZE; j++) {
-        //     data[j] = rand() % 256;
-        // }
-        //cmd.data = data;
-        //writeData(cmd.logicalPage, cmd.data);
+        // Read Data from Flash
+        unsigned char *readData = (unsigned char *)malloc(cmd.length);
+        readData = readDataFromFlash(cmd.logicalPage, cmd.length);
+        if (readData == NULL) {
+            printf("Can't Get Data from Flash!!!");
+        }
         
 
-        // 每100次print一次狀態
-        if (i % 100 == 0) {
-            printStatus();
+        // Compare Data
+        if (memcmp(cmd.data, readData, cmd.length) != 0) {
+            printf("Data mismatch at Logical Page Address %u, length %u\n", cmd.logicalPage, cmd.length);
+        } 
+        else {
+            printf("Data match at Logical Page Address %u, length %u\n", cmd.logicalPage, cmd.length);
         }
 
-        //free(data);
+        // Release Data
+        free(cmd.data);
+        free(readData);
+
+        // Write P2L Table to file and Print P2L and VPC Table Status.
+        const char *filename = "./P2L_Table.csv"; 
+        if (i != 0 && i % 100 == 0)
+        {
+            // Save P2L table data to file.
+            writeP2LTableToCSV(filename);
+        }        
+      
+        // 每 100 次 print 一次狀態
+        // if (i % 100 == 0) 
+        // {
+        //     printStatus();
+        // }
+
+        //sequential write, 寫滿碟之後再寫入的情況。
+        
     }
-    
-    // if (pthread_create(&write_thread, NULL, writeThread, &command) != 0) {
-    //     fprintf(stderr, "Error creating write thread\n");
-    //     return -100;
-    // }
-    
-    // if (pthread_create(&status_thread, NULL, printStatusThread, NULL) != 0) {
-    //     fprintf(stderr, "Error creating status thread\n");
-    //     return -200;
-    // }
-
-    // if (pthread_join(write_thread, NULL) != 0) {
-    //     fprintf(stderr, "Error joining write thread\n");
-    //     return -101;
-    // }
-
-    // unsigned char readBuffer[PAGE_SIZE];
-    // readData(command.logicalPage, readBuffer);
-    // printf("Read data: %s\n", readBuffer);
-
-
-
-    // if (pthread_cancel(status_thread) != 0) {
-    //     fprintf(stderr, "Error cancelling status thread\n");
-    //     return 3;
-    // }
 
     printStatus();
-
     //pthread_mutex_destroy(&lock);
+    system("PAUSE");
 
     return 0;
-
-    // printf("CHAR_BIT    :   %d\n", CHAR_BIT);
-    // printf("CHAR_MAX    :   %d\n", CHAR_MAX);
-    // printf("CHAR_MIN    :   %d\n", CHAR_MIN);
-    // printf("INT_MAX     :   %d\n", INT_MAX);
-    // printf("INT_MIN     :   %d\n", INT_MIN);
-    // printf("LONG_MAX    :   %ld\n", (long)LONG_MAX);
-    // printf("LONG_MIN    :   %ld\n", (long)LONG_MIN);
-    // printf("SCHAR_MAX   :   %d\n", SCHAR_MAX);
-    // printf("SCHAR_MIN   :   %d\n", SCHAR_MIN);
-    // printf("SHRT_MAX    :   %d\n", SHRT_MAX);
-    // printf("SHRT_MIN    :   %d\n", SHRT_MIN);
-    // printf("UCHAR_MAX   :   %d\n", UCHAR_MAX);
-    // printf("UINT_MAX    :   %u\n", (unsigned int)UINT_MAX);
-    // printf("ULONG_MAX   :   %lu\n", (unsigned long)ULONG_MAX);
-    // printf("USHRT_MAX   :   %d\n", (unsigned short)USHRT_MAX);
 }
