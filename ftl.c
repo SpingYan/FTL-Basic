@@ -14,7 +14,7 @@ typedef struct {
 typedef struct {
     unsigned int physicalPageAddress;
     unsigned int logicalPageAddress;
-    unsigned char *data;
+    unsigned char* data;
 } PhysicalPageMappingTable;
 
 // Virtual Block Status: Record Virtual Block's valid Pages and erase count.
@@ -87,8 +87,13 @@ void initializeFTL()
 
 // Update L2P Mapping Table
 int updateL2PTable(unsigned int logicalPage, unsigned int physicalPage)
-{    
-    L2P_Table[logicalPage].physicalPageAddress = physicalPage; 
+{        
+    if (L2P_Table[logicalPage].logicalPageAddress != logicalPage) {
+        printf(" L2P Table logical Address initial fail.");
+        return -1;
+    }
+
+    L2P_Table[logicalPage].physicalPageAddress = physicalPage;
 
     // for (unsigned int i = 0; i < TOTAL_BLOCKS * PAGES_PER_BLOCK; i++) {
     //     if (L2P_Table[i].logicalPageAddress == logicalPage) {
@@ -102,6 +107,11 @@ int updateL2PTable(unsigned int logicalPage, unsigned int physicalPage)
 // Update P2L Table (physical page address and logical page address and user data)
 int updateP2LTable(unsigned int physicalPage, unsigned int logicalPage, unsigned char *data)
 {
+    if (P2L_Table[physicalPage].physicalPageAddress != physicalPage) {
+        printf(" P2L Table Physical Address initial fail.");
+        return -1;
+    }
+
     P2L_Table[physicalPage].logicalPageAddress = logicalPage;
     P2L_Table[physicalPage].data = data;
 
@@ -122,7 +132,8 @@ int writeDataToFlash(unsigned int logicalPage, unsigned int length, unsigned cha
     if (FreePagesCount == 0)
     {
         //判斷 Free Virtual Block 的數量 (Criteria 判斷 OP Size 比例的)
-        if (FreeVirtualBlockCount > (BLOCKS_PER_DIE - (BLOCKS_PER_DIE * OP_SIZE))) {
+        // if (FreeVirtualBlockCount > (BLOCKS_PER_DIE - (BLOCKS_PER_DIE * OP_SIZE))) {
+        if (FreeVirtualBlockCount > 2) {
             FreePagesCount = TOTAL_DIES * PAGES_PER_BLOCK;
             WriteTargetVB ++;
         }
@@ -136,24 +147,33 @@ int writeDataToFlash(unsigned int logicalPage, unsigned int length, unsigned cha
     // 宣告目標 Physical Page 為 正在寫入的 VB + 剩餘的 Free Page Count.
     unsigned int targetPhysicalPage = (WriteTargetVB * BLOCKS_PER_DIE) + (TOTAL_DIES * PAGES_PER_BLOCK - FreePagesCount);
     if (updateL2PTable(logicalPage, targetPhysicalPage) != 0) {
-        printf("");
+        printf("updateL2PTable fail !!!");
     }
 
     // 更新 P2L Table
     if (updateP2LTable(targetPhysicalPage, logicalPage, data)) {
-        printf("");
+        printf("updateP2LTable fail !!!");
     }
 
     // 更新 VPC Table, Write Data 只對對應的 valid page + 1
     VPC[WriteTargetVB].validPages++;
     
-    // 使用的 Pages 數量陸續增加
-    FreePagesCount--;    
+    // 可使用的 Free Pages 減少. (目前只考慮 1 個 page 的長度寫入)
+    FreePagesCount = FreePagesCount - length;
 
     return 0;
 }
 
-int writeP2LTableToCSV(const char *filename) {    
+int writeP2LTableToCSV() {
+    time_t now = time(NULL); // 獲取當前時間
+    struct tm *t = localtime(&now); // 將時間轉換為本地時間結構體
+
+    char filename[64];
+    // 格式化時間並將其加入到檔名中
+    snprintf(filename, sizeof(filename), "./P2L-Table_%04d%02d%02d_%02d%02d%02d.csv",
+             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+             t->tm_hour, t->tm_min, t->tm_sec);
+
     FILE *file = fopen(filename, "w");
     if (file == NULL) {
         perror("Failed to open file");
@@ -166,7 +186,12 @@ int writeP2LTableToCSV(const char *filename) {
     // 寫入每一行數據
     for (unsigned int i = 0; i < TOTAL_BLOCKS * PAGES_PER_BLOCK; i++)
     {
-        fprintf(file, "%u,%u,%02X", P2L_Table[i].physicalPageAddress, P2L_Table[i].logicalPageAddress, P2L_Table[i].data);
+        if (P2L_Table[i].data != NULL) {
+            fprintf(file, "%u,%u,%02x", P2L_Table[i].physicalPageAddress, P2L_Table[i].logicalPageAddress, *(P2L_Table[i].data));
+        } else {
+            fprintf(file, "%u,%u", P2L_Table[i].physicalPageAddress, P2L_Table[i].logicalPageAddress);
+        }
+                    
         fprintf(file, "\n");
     }
     
@@ -180,16 +205,71 @@ unsigned char* readDataFromFlash(unsigned int logicalPage, unsigned int length)
     return P2L_Table[ppa].data;
 }
 
-// Get physical block address from L2P Table.
-unsigned int logicalToPhysical(unsigned int logicalPage) 
-{    
-    for (unsigned int i = 0; i < TOTAL_BLOCKS * PAGES_PER_BLOCK; i++) 
-    {
-        if (L2P_Table[i].logicalPageAddress == logicalPage) {
-            return L2P_Table[i].physicalPageAddress;
+// GC 目的: 找到下一個可以寫入的 Free VB
+// 1. 尋找 Erase 對象的 VB (Source VB): Minimal Valid Count
+// 2. 挑選 Target VB -> OP 空間或是 VPC[].validPage 是 0 的 VB.
+// 3. 寫入 OP 空間 (Target New VB) -> 此 VB 即為最新的 Free Target VB.
+// 4. Erase Source VB -> Erase Count + 1. 
+void garbageCollect()
+{
+    // find Minimal Valid Count VB
+    unsigned int minValidPages = TOTAL_DIES * PAGES_PER_BLOCK; // 36
+    // Source VB index.
+    // 尋找到需要 GC 的 source block
+    unsigned int sourceToEraseVB = INVALID; //target block to erase. (準備要清空的 VB)
+    // 尋找到要移動資料過去的 target block
+    unsigned int targetToMoveVB = INVALID; //target block to move on. (空的 Free VB)
+
+    // 1. 挑選 Source VB -> find Minimal Valid Count VB
+    for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
+        if (VPC[i].validPages < minValidPages) {
+            minValidPages = VPC[i].validPages;
+            sourceToEraseVB = i;
+        }        
+    }
+
+    // 2. 挑選 Target VB -> OP 空間或是 VPC[].validPage 是 0 的 VB.
+    for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
+        if (VPC[i].validPages == 0) {
+            targetToMoveVB = i;
         }
     }
-    return INVALID;
+
+    // 3. 將 source VB 的 valid page 與其資料寫入到 Free VB.
+    // 判斷此 page 是否為 valid -> 根據 P2L 的 logical -> 再根據 L2P 對應 Logical 的 physical 值是否相等。
+    
+
+    // 4. Erase 此 VB.
+    VPC[sourceToEraseVB].eraseCount++;
+    VPC[sourceToEraseVB].validPages = TOTAL_DIES * PAGES_PER_BLOCK;
+    for (unsigned int i = 0; i < TOTAL_DIES * PAGES_PER_BLOCK; i++) {
+        P2L_Table[sourceToEraseVB * TOTAL_DIES * PAGES_PER_BLOCK + i].logicalPageAddress = INVALID;
+        P2L_Table[sourceToEraseVB * TOTAL_DIES * PAGES_PER_BLOCK + i].data = NULL;
+    }
+
+    // 更新下次寫入要使用的 Free VB 與其可使用的 Free Page Count.
+    WriteTargetVB = targetToMoveVB;
+    FreePagesCount = TOTAL_DIES * PAGES_PER_BLOCK - minValidPages;
+
+}
+
+/*
+Wear-Leveling
+1. 將 valid count 較多的且 Erase count 較少的 block 上的數據搬移到 Erase Count 較多的 block 中
+*/
+void wearLeveling()
+{
+
+}
+
+// 顯示 Virtual Block 的 Valid Count 與 Erase Count 資訊
+void printStatus() 
+{    
+    printf("Virtual Block Status:\n");
+    for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) 
+    {
+        printf("VB: %u, Valid Pages = %u, Erase Count = %u\n", i, VPC[i].validPages, VPC[i].eraseCount);
+    }
 }
 
 /*
@@ -199,7 +279,7 @@ unsigned int logicalToPhysical(unsigned int logicalPage)
 2. 從 Oringinal Flash Block 中找到有效數據
 3. 把有效數據寫入目標 Flash Block, 目標 block = 搜尋條件為 erase count 較高的 block.
 */
-void garbageCollect()
+void garbageCollect_old()
 {
     // pthread_mutex_lock(&lock);
     // IsGCActive = 1;
@@ -294,25 +374,6 @@ void garbageCollect()
 
     // IsGCActive = 0;    
     //pthread_mutex_unlock(&lock);
-}
-
-/*
-Wear-Leveling
-1. 將 valid count 較多的且 Erase count 較少的 block 上的數據搬移到 Erase Count 較多的 block 中
-*/
-void wearLeveling()
-{
-
-}
-
-// 顯示 Virtual Block 的 Valid Count 與 Erase Count 資訊
-void printStatus() 
-{    
-    printf("Virtual Block Status:\n");
-    for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) 
-    {
-        printf("VB: %u, Valid Pages = %u, Erase Count = %u\n", i, VPC[i].validPages, VPC[i].eraseCount);
-    }
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -431,4 +492,16 @@ void printStatus()
 //     VPC[targetPhysicalPage / BLOCKS_PER_DIE].validPages++;
         
 //     // pthread_mutex_unlock(&lock);
+// }
+
+// Get physical block address from L2P Table.
+// unsigned int logicalToPhysical(unsigned int logicalPage) 
+// {    
+//     for (unsigned int i = 0; i < TOTAL_BLOCKS * PAGES_PER_BLOCK; i++) 
+//     {
+//         if (L2P_Table[i].logicalPageAddress == logicalPage) {
+//             return L2P_Table[i].physicalPageAddress;
+//         }
+//     }
+//     return INVALID;
 // }

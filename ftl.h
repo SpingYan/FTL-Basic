@@ -46,7 +46,7 @@ int updateL2PTable(unsigned int logicalPage, unsigned int physicalPage);
 int updateP2LTable(unsigned int physicalPage, unsigned int logicalPage, unsigned char *data);
 
 // save L2P Table to csv
-extern int writeP2LTableToCSV(const char *filename);
+extern int writeP2LTableToCSV();
 // Read Data from Flash
 extern unsigned char* readDataFromFlash(unsigned int logicalPage, unsigned int length);
 
@@ -55,18 +55,11 @@ void wearLeveling();
 
 // void* writeThread(void* arg);
 // void* printStatusThread(void* arg);
-// void writeData(unsigned int logicalPage, const unsigned char* data);
-// void writeData(unsigned int logicalPage, unsigned char* data);
-// void readData(unsigned int logicalPage, unsigned char* data);
 
-//L2P Table
-unsigned int logicalToPhysical(unsigned int logicalPage);
-//P2L Table
-unsigned int physicalToLogical(unsigned int physicalPage);
-
-void garbageCollect();
-void wearLeveling();
-
+// //L2P Table
+// unsigned int logicalToPhysical(unsigned int logicalPage);
+// //P2L Table
+// unsigned int physicalToLogical(unsigned int physicalPage);
 
 //Trim 對 invalid page 做處理
 void trim();
