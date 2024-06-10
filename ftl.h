@@ -31,24 +31,28 @@ Flash Geomerty B17A
 
 #define OP_SIZE 0.83
 #define INVALID 0xFFFFFFFF
+#define INVALID_CHAR 0xFF
 
 // int IsGCActive = 0;
 // unsigned int TotalEraseCount;
 
 // initial FTL
 void initializeFTL();
+// Free FTL Related Table buffer.
+//void freeTables();
+
 // Write Data to Flash
-int writeDataToFlash(unsigned int logicalPage, unsigned int length, unsigned char *data);
+int writeDataToFlash(unsigned int logicalPage, unsigned int length, unsigned char data);
 
 //L2P Table
 int updateL2PTable(unsigned int logicalPage, unsigned int physicalPage);
 //P2L Table
-int updateP2LTable(unsigned int physicalPage, unsigned int logicalPage, unsigned char *data);
+int updateP2LTable(unsigned int physicalPage, unsigned int logicalPage, unsigned char data);
 
 // save L2P Table to csv
 extern int writeP2LTableToCSV();
 // Read Data from Flash
-extern unsigned char* readDataFromFlash(unsigned int logicalPage, unsigned int length);
+extern unsigned char readDataFromFlash(unsigned int logicalPage, unsigned int length);
 
 void garbageCollect();
 void wearLeveling();

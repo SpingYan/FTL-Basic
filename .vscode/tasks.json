@@ -9,8 +9,7 @@
                 "${workspaceFolder}/main.c",
                 "${workspaceFolder}/ftl.c",
                 "-o",
-                "${workspaceFolder}/bin/main.exe",
-                "-lpthread"
+                "${workspaceFolder}/bin/main.exe"
             ],
             "options": {
                 "cwd": "C:\\MinGW\\bin"

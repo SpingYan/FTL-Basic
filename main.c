@@ -46,7 +46,7 @@ Flash Geomerty B17A
 
 typedef struct {
     unsigned int logicalPage; //LBA
-    unsigned char *data; //Write Data
+    unsigned char data; //Write Data
     unsigned int length; // length in LBA
 } WriteCommand;
 
@@ -54,71 +54,104 @@ typedef struct {
 // #define DATA_SIZE 4 // 每一個 page 存放的 user data 為 4 bytes
 // #define MAX_LBA_LENGTH 4 // 每次 command 傳送的 LBA 大小是 4 個 page
 
+unsigned int generate_complex_seed() {
+    unsigned int seed = (unsigned int)time(NULL);
+    seed ^= (unsigned int)clock();
+    seed ^= (unsigned int)rand();  // 使用隨機數生成器本身的輸出
+    seed ^= (unsigned int)getpid();
+        
+    return seed;
+}
+
 // 隨機產生擁有 length 長度的 Byte 資料
-void generateRandomDataforCmd(unsigned char *data, unsigned char length) {
+void generateRandomDataforCmd(unsigned char data, unsigned char length) {
     
-    for (unsigned int i = 0; i < length; i++) {
-        srand(time(NULL) * time(NULL) * getpid() * clock());
-        data[i] = rand() % 0xFF;
-    }
+    // for (unsigned int i = 0; i < length; i++) {
+    //     srand(generate_complex_seed());
+    //     data[i] = rand() % INVALID_CHAR;
+    // }
     return;
 }
 
 int main(int argc, char **argv) {       
+    printf("=============================================\n");
+    printf("           Start to Basic FTL Test\n");
+    printf("=============================================\n");
+    
     // Initial FTL and related flow.
     initializeFTL();
-    
-    // pthread_t write_thread;
-    // pthread_t status_thread;
-
-    // 以 OP Size 來限制 LBA 寫入的 Range
+    printf("Initial FTL Parameters Done.\n");
+ 
+    // 以 OP Size 來限制 LBA 寫入的 Range.
     unsigned int writeLogicalPageAddressRange = TOTAL_BLOCKS * PAGES_PER_BLOCK * OP_SIZE;
+    printf("OP Ratio is = %f, and Logical Page Range = 0 ~ %d\n", OP_SIZE, writeLogicalPageAddressRange);
+    // 顯示 Virtual Block Status
+    printStatus();
 
+    // --------------------------------------------------------------------------------------------
     // 寫入 NUM_WRITES 次數
-    // 1. 每 100 次 print 一次狀態，並寫 P2L Table 的檔案
-    // 2. 每次寫完後 read data (L2P -> P2L -> check P2L's lba -> check P2L's data)
+    // 1. 每次寫完後 read data 後 compare (L2P -> P2L -> check P2L's lba -> check P2L's data)
+    // 2. 每 100 次寫 P2L Table 的 csv 檔案，並 print 一次 VPC 狀態
+    // --------------------------------------------------------------------------------------------    
     for (unsigned int i = 0; i < NUM_WRITES; i++) {
         WriteCommand cmd;
-        srand(time(NULL) * time(NULL) * getpid() * clock());
+        Sleep(100);
+        srand(generate_complex_seed());
         cmd.logicalPage = rand() % (writeLogicalPageAddressRange);
-        cmd.length = 1; // rand() % (MAX_LBA_LENGTH) + 1;
-        cmd.data = (unsigned char *)malloc(cmd.length);
-        generateRandomDataforCmd(cmd.data, cmd.length);
-        
+        cmd.length = 1; // rand() % (MAX_LBA_LENGTH) + 1;                
+        cmd.data = rand() % INVALID_CHAR;
+
+        // cmd.data = (unsigned char *)malloc(cmd.length);
+        // generateRandomDataforCmd(cmd.data, cmd.length);
+        // printf("Generate Write CMD - Random Data Done. (generateRandomDataforCmd)\n");
+        printf("Write Command Info: cmd.logicalPage is [%u], cmd.data is [%02X]\n", cmd.logicalPage, cmd.data);
+
         // Write Data to Flash
-        writeDataToFlash(cmd.logicalPage, cmd.length, cmd.data);
+        if (writeDataToFlash(cmd.logicalPage, cmd.length, cmd.data) != 0) {
+            printf("Write Data to Flash Fail !!! (writeDataToFlash)\n");
+        }            
 
         // Read Data from Flash
-        unsigned char *readData = (unsigned char *)malloc(cmd.length);
-        readData = readDataFromFlash(cmd.logicalPage, cmd.length);
-        if (readData == NULL) {
-            printf("Can't Get Data from Flash!!!");
-        }
+        // unsigned char *readData = (unsigned char *)malloc(cmd.length);
+        // readData = readDataFromFlash(cmd.logicalPage, cmd.length);
+        unsigned char readData = readDataFromFlash(cmd.logicalPage, cmd.length);
+        // if (readData == NULL) {
+        //     printf("Can't Get Data from Flash !!!");
+        // }
         
         // Compare Data
-        if (memcmp(cmd.data, readData, cmd.length) != 0) {
-            printf("Data mismatch at Logical Page Address %u, length %u\n", cmd.logicalPage, cmd.length);
-        } 
-        else {
-            printf("Data match at Logical Page Address %u, length %u\n", cmd.logicalPage, cmd.length);
-        }
+        printf("Compare Data: Write Data is [%02X], Read Data is [%02X]\n", cmd.data, readData);
+        // if (memcmp(cmd.data, &readData, cmd.length) != 0) {
+        if (cmd.data != readData) {
+            printf("Data mismatch at Logical Page Address %u, length %u\n", cmd.logicalPage);
+        }         
 
-        // Release Data
-        free(cmd.data);
-        free(readData);
+        // Release Memory.
+        //free(cmd.data);
+        //free(readData);
+        // --------------------------------------------------------------------------------------------
 
         // Write P2L Table to file and Print P2L and VPC Table Status.
-        //const char *filename = "./P2L_Table";
+        // const char *filename = "./P2L_Table";
         if (i != 0 && i % 100 == 0)
         {
             // Save P2L table data to file.
-            writeP2LTableToCSV();
+            if(writeP2LTableToCSV()!=0) {
+                printf("Write P2L Table to csv File Fail !!!\n");
+            }
+            printf("Write P2L Table to csv File Success !!!\n");
+            // Print VPC Status.
             printStatus();
             Sleep(1000);
         }        
     }
 
+    // Display VB Status.
     printStatus();
+
+    // Free 
+    // freeTables();
+
     //pthread_mutex_destroy(&lock);
     system("PAUSE");
 
