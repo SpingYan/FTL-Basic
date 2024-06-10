@@ -5,6 +5,7 @@
 #include <string.h>
 #include "ftl.h"
 #include <unistd.h>
+#include <windows.h>
 
 /* B58R TLC
 #define CE_NUM 8
@@ -55,8 +56,9 @@ typedef struct {
 
 // 隨機產生擁有 length 長度的 Byte 資料
 void generateRandomDataforCmd(unsigned char *data, unsigned char length) {
+    
     for (unsigned int i = 0; i < length; i++) {
-        srand(time(NULL) ^ getpid() ^ clock());
+        srand(time(NULL) * time(NULL) * getpid() * clock());
         data[i] = rand() % 0xFF;
     }
     return;
@@ -77,7 +79,7 @@ int main(int argc, char **argv) {
     // 2. 每次寫完後 read data (L2P -> P2L -> check P2L's lba -> check P2L's data)
     for (unsigned int i = 0; i < NUM_WRITES; i++) {
         WriteCommand cmd;
-        srand(time(NULL) ^ getpid() ^ clock());
+        srand(time(NULL) * time(NULL) * getpid() * clock());
         cmd.logicalPage = rand() % (writeLogicalPageAddressRange);
         cmd.length = 1; // rand() % (MAX_LBA_LENGTH) + 1;
         cmd.data = (unsigned char *)malloc(cmd.length);
@@ -111,16 +113,9 @@ int main(int argc, char **argv) {
         {
             // Save P2L table data to file.
             writeP2LTableToCSV();
-        }
-      
-        // 每 100 次 print 一次狀態
-        // if (i % 100 == 0) 
-        // {
-        //     printStatus();
-        // }
-
-        //sequential write, 寫滿碟之後再寫入的情況。
-        
+            printStatus();
+            Sleep(1000);
+        }        
     }
 
     printStatus();
