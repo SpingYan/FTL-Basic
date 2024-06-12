@@ -79,15 +79,15 @@ int main(int argc, char **argv) {
     printf("=============================================\n");
     
     // Initial FTL and related flow.
-    initializeFTL();
+    initializeFTL();    
     printf("Initial FTL Parameters Done.\n");
+
+    // 顯示 Virtual Block Status
+    printStatus();
  
     // 以 OP Size 來限制 LBA 寫入的 Range.
     unsigned int writeLogicalPageAddressRange = TOTAL_BLOCKS * PAGES_PER_BLOCK * OP_SIZE;
     printf("OP Ratio is = %f, and Logical Page Range = 0 ~ %d\n", OP_SIZE, writeLogicalPageAddressRange);
-    // 顯示 Virtual Block Status
-    printStatus();
-
     // --------------------------------------------------------------------------------------------
     // 寫入 NUM_WRITES 次數
     // 1. 每次寫完後 read data 後 compare (L2P -> P2L -> check P2L's lba -> check P2L's data)

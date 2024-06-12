@@ -19,7 +19,7 @@ typedef struct {
 
 // Virtual Block Status: Record Virtual Block's valid Pages and erase count.
 typedef struct {
-    unsigned int validPages;
+    unsigned int validCount;
     unsigned int eraseCount;
 } VirtualBlockStatus;
 
@@ -29,7 +29,7 @@ Table 1: FTL mapping table 紀錄每個 Logical Page Address 對應的 Physical 
 Table 2: FTL mapping table 紀錄每個 Physical Page Address 對應的 Logical Page Address 與 Data.
 Options: VPBM (Valid Page Bit Map) Table, 紀錄每個 physical block 上哪一個 page 是有效數據 (移除 VPBM, 改為 P2L 方式確認是否為 Valid Page)
     ---> 實現在 GC 時只讀有效數據 Valid data.
-Table 3: VPC (Valid page count) Table, 紀錄每個 physical block 的有效 page count.
+Table 3: VBStatus (Virtual Block Status) Table, 紀錄每個 Virtual Block 的有效 page count 與 erase Count.
     ---> 通常 GC 會排序此表回收最少 valid page 的 flash block
 */
 // Table 1: L2P Table (Logical Page Address to Physical Page Address Table)
@@ -38,8 +38,8 @@ LogicalPageMappingTable L2P_Table[TOTAL_BLOCKS * PAGES_PER_BLOCK];
 PhysicalPageMappingTable P2L_Table[TOTAL_BLOCKS * PAGES_PER_BLOCK];
 // Table 2: VPBM (Valid Page Bit Map)
 // PhysicalValidTable VPBM[BLOCKS_PER_DIE][TOTAL_DIES * PAGES_PER_BLOCK];
-// Table 3: VPC (Valid Page Count), use Block Status struct.
-VirtualBlockStatus VPC[BLOCKS_PER_DIE];
+// Table 3: VBStatus (Valid Page Count), use Block Status struct.
+VirtualBlockStatus VBStatus[BLOCKS_PER_DIE];
 
 // 目前寫入的 Virtual Block 的 Free Page Count (每個 VB 上限為 TOTAL_DIES * PAGES_PER_BLOCK)
 unsigned int FreePagesCount;
@@ -53,7 +53,7 @@ unsigned int TotalEraseCount;
 //初始化 FTL 相關使用的 Table
 void initializeFTL() 
 {
-    //Initial L2P, P2L, VPBM tables.
+    //Initial L2P, P2L, VBStatus tables.
     for (unsigned int i = 0; i < TOTAL_BLOCKS * PAGES_PER_BLOCK; i++)
     {
         //L2P
@@ -66,18 +66,18 @@ void initializeFTL()
         P2L_Table[i].data = INVALID_CHAR;// (unsigned char *)malloc(sizeof(unsigned char));
     }
 
-    // Initial VPC (Valid Page Count), Block Status.
+    // Initial VBStatus (Valid Page Count), Block Status.
     // BlockStatus PhysicalBlockStatus[BLOCKS_PER_DIE][TOTAL_DIES * PAGES_PER_BLOCK]; //書中範例的二維陣列 Block Map
-    // BlockStatus VPC[BLOCKS_PER_DIE];
+    // BlockStatus VBStatus[BLOCKS_PER_DIE];
     for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) 
     {
-        VPC[i].validPages = 0;
-        VPC[i].eraseCount = 0;
+        VBStatus[i].validCount = 0;
+        VBStatus[i].eraseCount = 0;
     }
         
     // 目前寫入的 Virtual Block 的 Free Page Count (每個 VB 上限為 TOTAL_DIES * PAGES_PER_BLOCK)
     FreePagesCount = TOTAL_DIES * PAGES_PER_BLOCK;
-    // 空的 Virtual Block 數量 (VB 上限為 TOTAL_DIES)
+    // 空的 Virtual Block 數量 (VB 上限為 BLOCKS_PER_DIE)
     FreeVirtualBlockCount = BLOCKS_PER_DIE;
     // 當下目標寫入的 Virtual Block
     WriteTargetVB = 0;    
@@ -99,11 +99,11 @@ int updateL2PTable(unsigned int logicalPage, unsigned int physicalPage)
         return -1;
     }
 
-    // 判斷 physical page 是否有值, Y: 需要更新 VPC[].ValidCount--
+    // 判斷 physical page 是否有值, Y: 需要更新 VBStatus[].ValidCount--
     if (L2P_Table[logicalPage].physicalPageAddress != INVALID)
     {
         unsigned int tempVB = L2P_Table[logicalPage].physicalPageAddress / (TOTAL_DIES * PAGES_PER_BLOCK);
-        VPC[tempVB].validPages--;
+        VBStatus[tempVB].validCount--;
     }
     
     L2P_Table[logicalPage].physicalPageAddress = physicalPage;
@@ -179,8 +179,8 @@ int writeDataToFlash(unsigned int logicalPage, unsigned int length, unsigned cha
         printf("updateP2LTable fail !!!");
     }
 
-    // 更新 VPC Table, Write Data 只對對應的 valid page + 1
-    VPC[WriteTargetVB].validPages++;
+    // 更新 VBStatus Table, Write Data 只對對應的 valid page + 1
+    VBStatus[WriteTargetVB].validCount++;
     
     // 可使用的 Free Pages 減少. (目前只考慮 1 個 page 的長度寫入)
     FreePagesCount = FreePagesCount - length;
@@ -234,7 +234,7 @@ unsigned char readDataFromFlash(unsigned int logicalPage, unsigned int length)
 
 // GC 目的: 找到下一個可以寫入的 Free VB.
 // 1. 尋找 Erase 對象的 VB (Source VB): Minimal Valid Count.
-// 2. 挑選 Target VB -> OP 空間或是 VPC[].validPage 是 0 的 VB.
+// 2. 挑選 Target VB -> OP 空間或是 VBStatus[].validPage 是 0 的 VB.
 // 3. 寫入 OP 空間 (Target New VB) -> 此 VB 即為最新的 Free Target VB.
 // 4. Erase Source VB -> Erase Count + 1.
 void garbageCollect()
@@ -249,15 +249,15 @@ void garbageCollect()
 
     // 1. 挑選 Source VB -> find Minimal Valid Count VB.
     for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
-        if (VPC[i].validPages != 0 && VPC[i].validPages < minValidPages) {
-            minValidPages = VPC[i].validPages;
+        if (VBStatus[i].validCount != 0 && VBStatus[i].validCount < minValidPages) {
+            minValidPages = VBStatus[i].validCount;
             sourceToEraseVB = i;
         }        
     }
 
-    // 2. 挑選 Target VB -> OP 空間或是 VPC[].validPage 是 0 的 VB.
+    // 2. 挑選 Target VB -> OP 空間或是 VBStatus[].validPage 是 0 的 VB.
     for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
-        if (VPC[i].validPages == 0) {
+        if (VBStatus[i].validCount == 0) {
             targetToMoveVB = i;
         }
     }
@@ -282,15 +282,15 @@ void garbageCollect()
             // 更新 L2P Table 到新的 Physical Page Address.
             L2P_Table[tempLogical].physicalPageAddress = tempTargetPage;
 
-            // 更新 VPC Table, Write Data 只對對應的 valid page + 1
-            VPC[targetToMoveVB].validPages++;
+            // 更新 VBStatus Table, Write Data 只對對應的 valid page + 1
+            VBStatus[targetToMoveVB].validCount++;
             tempTargetPage++;
         }        
     }
 
     // 4. Erase 此 VB.
-    VPC[sourceToEraseVB].eraseCount++;
-    VPC[sourceToEraseVB].validPages = 0;
+    VBStatus[sourceToEraseVB].eraseCount++;
+    VBStatus[sourceToEraseVB].validCount = 0;
     for (unsigned int i = 0; i < TOTAL_DIES * PAGES_PER_BLOCK; i++) {
         P2L_Table[sourceToEraseVB * TOTAL_DIES * PAGES_PER_BLOCK + i].logicalPageAddress = INVALID;
         P2L_Table[sourceToEraseVB * TOTAL_DIES * PAGES_PER_BLOCK + i].data = INVALID_CHAR;
@@ -319,7 +319,7 @@ void printStatus()
     printf("--------------------------------------------------------------\n");
     for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) 
     {
-        printf("VB: %u, Valid Pages = %u, Erase Count = %u\n", i, VPC[i].validPages, VPC[i].eraseCount);
+        printf("VB: %u, Valid Count = %u, Erase Count = %u\n", i, VBStatus[i].validCount, VBStatus[i].eraseCount);
     }
     printf("--------------------------------------------------------------\n");
 }
@@ -355,9 +355,9 @@ void garbageCollect_old()
     // 1. 挑選 Oringinal Flash Block -> find min valid count (貪婪算法) and 較小的 Erase Count 的 block
     for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) 
     {
-        if (VPC[i].validPages < minValidPages && VPC[i].validPages >= 0 && VPC[i].eraseCount <= averageEraseCount)
+        if (VBStatus[i].validCount < minValidPages && VBStatus[i].validCount >= 0 && VBStatus[i].eraseCount <= averageEraseCount)
         {
-            minValidPages = VPC[i].validPages;
+            minValidPages = VBStatus[i].validCount;
             toEraseVictimBlock = i;
         }        
     }    
@@ -391,9 +391,9 @@ void garbageCollect_old()
                 break;
             }
             
-            if (VPC[i].eraseCount < minEraseCounts && VPC[i].validPages < TOTAL_DIES * PAGES_PER_BLOCK)
+            if (VBStatus[i].eraseCount < minEraseCounts && VBStatus[i].validCount < TOTAL_DIES * PAGES_PER_BLOCK)
             {
-                minEraseCounts = VPC[i].eraseCount;
+                minEraseCounts = VBStatus[i].eraseCount;
                 moveToVictimBlock = i;
             }
         }
@@ -401,22 +401,22 @@ void garbageCollect_old()
         printf("[GC Flow] Target Physical Block to Move: %u\n", moveToVictimBlock);
         
         // 針對此 block 可以移動過去的 page 數
-        unsigned int movePageCount = TOTAL_DIES * PAGES_PER_BLOCK - VPC[moveToVictimBlock].validPages;
+        unsigned int movePageCount = TOTAL_DIES * PAGES_PER_BLOCK - VBStatus[moveToVictimBlock].validCount;
         minValidPages = minValidPages - movePageCount;
 
         // 將對應的 Valid Page 寫入對應的 moveToVictimBlock.
         for (unsigned int i = 0; i < TOTAL_DIES * PAGES_PER_BLOCK; i++)
         {
                                           
-            // 更新 VPC, Block Status, total page valid count +1.
-            VPC[moveToVictimBlock].validPages++;
+            // 更新 VBStatus, Block Status, total page valid count +1.
+            VBStatus[moveToVictimBlock].validCount++;
             
         }
     }    
 
-    // Erase block and update VPC block info.
-    VPC[toEraseVictimBlock].validPages = 0;
-    VPC[toEraseVictimBlock].eraseCount++;
+    // Erase block and update VBStatus block info.
+    VBStatus[toEraseVictimBlock].validCount = 0;
+    VBStatus[toEraseVictimBlock].eraseCount++;
     TotalEraseCount++;
 
     // 設定目標的 Erase VB.
@@ -495,7 +495,7 @@ void garbageCollect_old()
 //         unsigned int writedBlockPage = 0;
 //         for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++)
 //         {
-//             if (VPC[i].validPages == 0)
+//             if (VBStatus[i].validCount == 0)
 //             {
 //                 writedBlockPage++;
 //                 FreeVirtualBlockCount=i;                
@@ -522,8 +522,8 @@ void garbageCollect_old()
 //         // 更新 VPBM, 將 vaild flag 設為 0
 //         updateVBPM(oldPhysicalPage, 0);        
 
-//         // 更新 VPC, Block Status, 將 total page valid count -1
-//         VPC[oldPhysicalPage / BLOCKS_PER_DIE].validPages--;
+//         // 更新 VBStatus, Block Status, 將 total page valid count -1
+//         VBStatus[oldPhysicalPage / BLOCKS_PER_DIE].validCount--;
 //     }
 
 //     // 尋找對應的 free physical block/page
@@ -540,8 +540,8 @@ void garbageCollect_old()
 //     updateL2PTable(logicalPage, targetPhysicalPage);        
 //     // 將 VPBM 對應的 physical page 設為 1
 //     updateVBPM(targetPhysicalPage, 1);
-//     // 更新 VPC, Block Status, total page valid count +1.
-//     VPC[targetPhysicalPage / BLOCKS_PER_DIE].validPages++;
+//     // 更新 VBStatus, Block Status, total page valid count +1.
+//     VBStatus[targetPhysicalPage / BLOCKS_PER_DIE].validCount++;
         
 //     // pthread_mutex_unlock(&lock);
 // }
