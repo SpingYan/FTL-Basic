@@ -239,8 +239,8 @@ unsigned char readDataFromFlash(unsigned int logicalPage, unsigned int length)
 // 4. Erase Source VB -> Erase Count + 1.
 void garbageCollect()
 {
-    // find Minimal Valid Count VB
-    unsigned int minValidPages = TOTAL_DIES * PAGES_PER_BLOCK; // 36
+    // find Minimal Valid Count on VB
+    unsigned int minValidCount = TOTAL_DIES * PAGES_PER_BLOCK; // 36
     // Source VB index.
     // 尋找到需要 GC 的 source block
     unsigned int sourceToEraseVB = INVALID; //target block to erase. (準備要清空的 VB)
@@ -249,8 +249,8 @@ void garbageCollect()
 
     // 1. 挑選 Source VB -> find Minimal Valid Count VB.
     for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
-        if (VBStatus[i].validCount != 0 && VBStatus[i].validCount < minValidPages) {
-            minValidPages = VBStatus[i].validCount;
+        if (VBStatus[i].validCount != 0 && VBStatus[i].validCount < minValidCount) {
+            minValidCount = VBStatus[i].validCount;
             sourceToEraseVB = i;
         }        
     }
@@ -299,7 +299,7 @@ void garbageCollect()
     TotalEraseCount++;
     // 更新下次寫入要使用的 Free VB 與其可使用的 Free Page Count.
     WriteTargetVB = targetToMoveVB;
-    FreePagesCount = TOTAL_DIES * PAGES_PER_BLOCK - minValidPages;
+    FreePagesCount = TOTAL_DIES * PAGES_PER_BLOCK - minValidCount;
 }
 
 /*
@@ -340,7 +340,7 @@ void garbageCollect_old()
     // 尋找最少的 valid count 對應的 VB, toEraseVB -> new FreeVB    
 
     // 尋找最小的 Valid Count 的 block
-    unsigned int minValidPages = TOTAL_DIES * PAGES_PER_BLOCK + 1; // 36 + 1
+    unsigned int minValidCount = TOTAL_DIES * PAGES_PER_BLOCK + 1; // 36 + 1
     // 尋找小於或等於平均某除次數的的 block
     unsigned int averageEraseCount = TotalEraseCount / BLOCKS_PER_DIE + 1;
     // 尋找 Erase Count 最小的 block
@@ -355,9 +355,9 @@ void garbageCollect_old()
     // 1. 挑選 Oringinal Flash Block -> find min valid count (貪婪算法) and 較小的 Erase Count 的 block
     for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) 
     {
-        if (VBStatus[i].validCount < minValidPages && VBStatus[i].validCount >= 0 && VBStatus[i].eraseCount <= averageEraseCount)
+        if (VBStatus[i].validCount < minValidCount && VBStatus[i].validCount >= 0 && VBStatus[i].eraseCount <= averageEraseCount)
         {
-            minValidPages = VBStatus[i].validCount;
+            minValidCount = VBStatus[i].validCount;
             toEraseVictimBlock = i;
         }        
     }    
@@ -375,13 +375,13 @@ void garbageCollect_old()
     // 要做 Erase 的 VB.
     printf("[GC Flow] Target Block for Erase: %u\n", toEraseVictimBlock);    
     // 需要移動的 Valid Pages.
-    printf("[GC Flow] Move Pages Number %u:\n", minValidPages);
+    printf("[GC Flow] Move Pages Number %u:\n", minValidCount);
     // ---------------------------------------------------------------------------------------------
 
 
     // 尋找適合的 Target Block (Erase Count 最高且有 Valid page 尚未用完的 Block 開始搜尋.)
     // 並移動
-    while (minValidPages > 0)
+    while (minValidCount > 0)
     {
         for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) 
         {
@@ -402,7 +402,7 @@ void garbageCollect_old()
         
         // 針對此 block 可以移動過去的 page 數
         unsigned int movePageCount = TOTAL_DIES * PAGES_PER_BLOCK - VBStatus[moveToVictimBlock].validCount;
-        minValidPages = minValidPages - movePageCount;
+        minValidCount = minValidCount - movePageCount;
 
         // 將對應的 Valid Page 寫入對應的 moveToVictimBlock.
         for (unsigned int i = 0; i < TOTAL_DIES * PAGES_PER_BLOCK; i++)
