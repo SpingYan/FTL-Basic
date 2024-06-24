@@ -1,6 +1,5 @@
 #ifndef FTL_H
 #define FTL_H
-#include <pthread.h>
 
 /* B58R TLC
 #define CE_NUM 8
@@ -20,60 +19,41 @@ Flash Geomerty B17A
 */
 
 // 深入淺出 SSD 書本的案例
-#define TOTAL_DIES 4
-#define BLOCKS_PER_DIE 6
+// #define TOTAL_DIES 4
+// #define BLOCKS_PER_DIE 6
+// #define PAGES_PER_BLOCK 9
+// #define PAGE_SIZE 4096 //Bytes
+
+#define TOTAL_DIES 4 // Total Dies
+#define BLOCKS_PER_DIE 7 //7
 #define PAGES_PER_BLOCK 9
-#define PAGE_SIZE 4096 //Bytes
+#define PAGE_SIZE 16384 //Bytes
+
 #define BLOCK_SIZE (PAGES_PER_BLOCK * PAGE_SIZE) //Bytes
 
 #define TOTAL_BLOCKS (TOTAL_DIES * BLOCKS_PER_DIE)
 #define TOTAL_PAGES (TOTAL_BLOCKS * PAGES_PER_BLOCK)
 
-#define OP_SIZE 0.83
+#define OP_SIZE 0.8
 #define INVALID 0xFFFFFFFF
 #define INVALID_CHAR 0xFF
-
-// int IsGCActive = 0;
-// unsigned int TotalEraseCount;
+#define INVALID_SHORT 0xFFFF
 
 // initial FTL
 void initializeFTL();
-// Free FTL Related Table buffer.
-//void freeTables();
-
 // Write Data to Flash
-int writeDataToFlash(unsigned int logicalPage, unsigned int length, unsigned char data);
-
-//L2P Table
+int writeDataToFlash(unsigned int logicalPage, unsigned int length, unsigned short data);
+// Read Data from Flash for single LCA.
+unsigned short readDataFromFlash(unsigned int logicalPage, unsigned int length);
+// Save L2P Table to csv
+int writeP2LTableToCSV();
+// Update L2P Table
 int updateL2PTable(unsigned int logicalPage, unsigned int physicalPage);
-//P2L Table
-int updateP2LTable(unsigned int physicalPage, unsigned int logicalPage, unsigned char data);
-
-// save L2P Table to csv
-extern int writeP2LTableToCSV();
-// Read Data from Flash
-extern unsigned char readDataFromFlash(unsigned int logicalPage, unsigned int length);
-
-void garbageCollect();
-void wearLeveling();
-
-// void* writeThread(void* arg);
-// void* printStatusThread(void* arg);
-
-// //L2P Table
-// unsigned int logicalToPhysical(unsigned int logicalPage);
-// //P2L Table
-// unsigned int physicalToLogical(unsigned int physicalPage);
-
-//Trim 對 invalid page 做處理
-void trim();
-
-void displayValidCountTable();
-void displayEraseCountTable();
-
-void printStatus();
-
-// extern pthread_mutex_t lock;
-// extern int isGCActive;
+// Update P2L Table
+int updateP2LTable(unsigned int physicalPage, unsigned int logicalPage, unsigned short data);
+// Do Garbage Collect Flow (wear-leveling = 0: Common GC, 1: Wear-Leveling)
+int garbageCollect(unsigned int wearLeveling);
+// Print Virtual Block Status
+void printVBStatus();
 
 #endif //FTL_H

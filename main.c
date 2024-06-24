@@ -1,158 +1,238 @@
 #include <stdio.h>
 #include <stdlib.h>
-//#include <pthread.h>
 #include <time.h>
 #include <string.h>
 #include "ftl.h"
 #include <unistd.h>
 #include <windows.h>
+#include "freeVB.h"
 
-/* B58R TLC
-#define CE_NUM 8
-#define PLANE_NUM 6
-#define BLOCK_NUM 567
-#define PAGE_NUM 2784
-#define PAGE_SIZE 18352 //Bytes
-*/
-
-/*
-Flash Geomerty B17A
-2CE 474 Block 2304 Page 4 Plane
-#define CE_NUM 2
-#define PLANE_NUM 4
-#define BLOCK_NUM 466
-#define PAGE_NUM 2304
-*/
-
-// Sample for Simulation
-// #define CE_NUM 2
-// #define PLANE_NUM 2
-// #define BLOCK_NUM 1980
-// #define PAGE_NUM 1152
-// #define PAGE_SIZE 16384 //Bytes
-// // VB size = block
-// #define VB_SIZE
-
-/*
-    Create thread for write test flow
-    0. table init -> pre-condition -> Y: Seq write 100%
-    1. Thread 1: "Write" LBA, length -> prepare cmd -> excute cmd.
-        -> trim flow and write flow
-        -> Erase Count +1 -> Y: Gen Table Log
-    2. Get Valid Count Table
-       Get Erase Count Table
-       program page -> erase block
-*/
-
+// Write Command
 typedef struct {
-    unsigned int logicalPage; //LBA
-    unsigned char data; //Write Data
-    unsigned int length; // length in LBA
+    unsigned int logicalPage;   //LCA
+    unsigned short data;        //Write Data
+    unsigned int length;        //length in LCA
 } WriteCommand;
 
-#define NUM_WRITES 1000
-// #define DATA_SIZE 4 // 每一個 page 存放的 user data 為 4 bytes
-// #define MAX_LBA_LENGTH 4 // 每次 command 傳送的 LBA 大小是 4 個 page
+// Write Data Info Array
+typedef struct {
+    unsigned int logicalPage;
+    unsigned short data;
+} WriteData;
+
+#define NUM_WRITES 2000
+#define NUM_LOOPS 100
+#define LCA_RANGE 180 //(TOTAL_BLOCKS * PAGES_PER_BLOCK * OP_SIZE)
+// #define DATA_SIZE 4 // every page's user data is 4 bytes.
+// #define MAX_LBA_LENGTH 4 // every command length LBA Size is 4 pages.
 
 unsigned int generate_complex_seed() {
     unsigned int seed = (unsigned int)time(NULL);
     seed ^= (unsigned int)clock();
-    seed ^= (unsigned int)rand();  // 使用隨機數生成器本身的輸出
+    seed ^= (unsigned int)rand();
     seed ^= (unsigned int)getpid();
         
     return seed;
 }
 
-// 隨機產生擁有 length 長度的 Byte 資料
-void generateRandomDataforCmd(unsigned char data, unsigned char length) {
-    
-    // for (unsigned int i = 0; i < length; i++) {
-    //     srand(generate_complex_seed());
-    //     data[i] = rand() % INVALID_CHAR;
-    // }
-    return;
+// Initialize Golden Write Data. (data is logical page)
+void initializeWriteGoldenData(WriteData *glodenWriteData, unsigned int lcaRange) {
+   // unsigned int length = sizeof(glodenWriteData);
+   for (unsigned int i = 0; i < lcaRange; i++) {
+        glodenWriteData[i].logicalPage = i;
+        glodenWriteData[i].data = i;
+   }
 }
 
-int main(int argc, char **argv) {       
-    printf("=============================================\n");
-    printf("           Start to Basic FTL Test\n");
-    printf("=============================================\n");
-    
-    // Initial FTL and related flow.
-    initializeFTL();    
-    printf("Initial FTL Parameters Done.\n");
-
-    // 顯示 Virtual Block Status
-    printStatus();
- 
-    // 以 OP Size 來限制 LBA 寫入的 Range.
-    unsigned int writeLogicalPageAddressRange = TOTAL_BLOCKS * PAGES_PER_BLOCK * OP_SIZE;
-    printf("OP Ratio is = %f, and Logical Page Range = 0 ~ %d\n", OP_SIZE, writeLogicalPageAddressRange);
-    // --------------------------------------------------------------------------------------------
-    // 寫入 NUM_WRITES 次數
-    // 1. 每次寫完後 read data 後 compare (L2P -> P2L -> check P2L's lba -> check P2L's data)
-    // 2. 每 100 次寫 P2L Table 的 csv 檔案，並 print 一次 VPC 狀態
-    // --------------------------------------------------------------------------------------------    
-    for (unsigned int i = 0; i < NUM_WRITES; i++) {
-        WriteCommand cmd;
-        Sleep(100);
-        srand(generate_complex_seed());
-        cmd.logicalPage = rand() % (writeLogicalPageAddressRange);
-        cmd.length = 1; // rand() % (MAX_LBA_LENGTH) + 1;                
-        cmd.data = rand() % INVALID_CHAR;
-
-        // cmd.data = (unsigned char *)malloc(cmd.length);
-        // generateRandomDataforCmd(cmd.data, cmd.length);
-        // printf("Generate Write CMD - Random Data Done. (generateRandomDataforCmd)\n");
-        printf("Write Command Info: cmd.logicalPage is [%u], cmd.data is [%02X]\n", cmd.logicalPage, cmd.data);
-
-        // Write Data to Flash
-        if (writeDataToFlash(cmd.logicalPage, cmd.length, cmd.data) != 0) {
-            printf("Write Data to Flash Fail !!! (writeDataToFlash)\n");
-        }            
-
-        // Read Data from Flash
-        // unsigned char *readData = (unsigned char *)malloc(cmd.length);
-        // readData = readDataFromFlash(cmd.logicalPage, cmd.length);
-        unsigned char readData = readDataFromFlash(cmd.logicalPage, cmd.length);
-        // if (readData == NULL) {
-        //     printf("Can't Get Data from Flash !!!");
-        // }
-        
-        // Compare Data
-        printf("Compare Data: Write Data is [%02X], Read Data is [%02X]\n", cmd.data, readData);
-        // if (memcmp(cmd.data, &readData, cmd.length) != 0) {
-        if (cmd.data != readData) {
-            printf("Data mismatch at Logical Page Address %u, length %u\n", cmd.logicalPage);
-        }         
-
-        // Release Memory.
-        //free(cmd.data);
-        //free(readData);
-        // --------------------------------------------------------------------------------------------
-
-        // Write P2L Table to file and Print P2L and VPC Table Status.
-        // const char *filename = "./P2L_Table";
-        if (i != 0 && i % 100 == 0)
-        {
-            // Save P2L table data to file.
-            if(writeP2LTableToCSV()!=0) {
-                printf("Write P2L Table to csv File Fail !!!\n");
-            }
-            printf("Write P2L Table to csv File Success !!!\n");
-            // Print VPC Status.
-            printStatus();
-            Sleep(1000);
-        }        
+// Write Pattern Cases
+// Add Sequence Write's Pattern，write 0 ~ 179 LCA.
+// Add position Write's Pattern，Pre-condition write 0 ~ 179 after 0 ~ 179. after full range,
+// Direct to write single LCA 0 address.
+// Modify Random write's Pattern，Before write, do Pre-Condition first.
+// ------------------------------------------------------------------------------------------------
+// [Pre-Condition] Add a Sequence Write pattern that writes 0 to 179 LCA in order for loops.
+int sequenceWrite_PreCondition(WriteData *glodenWriteData, unsigned int start, unsigned int end) {    
+    for (unsigned int i = start; i < end; i++) {
+        writeDataToFlash(i, 1, glodenWriteData[i].data);        
     }
 
-    // Display VB Status.
-    printStatus();
+    return 0;
+}
 
-    // Free 
-    // freeTables();
+// ------------------------------------------------------------------------------------------------
+// [Write Test] Add a Sequence Write pattern that writes 0 to 179 LCA in order for loops.
+int sequenceWrite_Test(WriteData *glodenWriteData, unsigned int start, unsigned int end) {
+    for (unsigned int loop = 0; loop < NUM_LOOPS; loop++) {
+        for (unsigned int i = start; i < end; i++) {
+            writeDataToFlash(i, 1, glodenWriteData[i].data);            
+        }
+        printf("[Loop: %u] Sequence Write Test Done.\n", loop);
+    }
+    return 0;
+}
 
-    //pthread_mutex_destroy(&lock);
+// ------------------------------------------------------------------------------------------------
+// [Write Test] Perform a pre-condition by writing all positions from 0 to 179 first in order (SEQ Write 100%),
+// then Random Write for loop.
+int randomWrite_Test(WriteData *glodenWriteData, unsigned int start, unsigned int end) {
+    // random seed.
+    srand(generate_complex_seed());
+
+    // Determine start and end parameters is reasonable. 
+    if (start > end) {
+        printf("[Fail] The number START is greater than the number END !!!\n");
+        return -1;
+    } else if ( start == end) {
+        printf("[Fail] The number START is equal to the number END !!!\n");
+        return -2;
+    }
+
+    unsigned int lcaRange = end - start;
+
+    for (unsigned int loop = 0; loop < NUM_WRITES; loop++) {
+        unsigned int lca = start + (rand() % (lcaRange));
+        writeDataToFlash(lca, 1, glodenWriteData[lca].data);        
+    }
+    printf("[Loops: 1000] Random Write LCA: %u Data Done.\n");
+
+    return 0;
+}
+
+// ------------------------------------------------------------------------------------------------
+// [Write Test] Add a 0 position write pattern. First, perform a pre-condition by writing all positions from 0 to 179 in order, 
+// then continuously write to LCA position 0 for loops.
+int pointWrite_Test(WriteData *glodenWriteData, unsigned int logicalPageAddress) {
+    for (unsigned int loop = 0; loop < NUM_WRITES; loop++) {
+        writeDataToFlash(logicalPageAddress, 1, glodenWriteData[logicalPageAddress].data);        
+    }
+    printf("[Loop: 1000] Position Write LCA: %u Data Done.\n", logicalPageAddress);
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    // --------------------------------------------------------------------------------------------
+    // Select Test Pattern.
+    printf("=======================================================================================\n");
+    printf("                             Start to Basic FTL Test\n");
+    printf("=======================================================================================\n");
+    printf("Please Select Test Pattern:\n");
+    printf("    1. Sequence Write. (Add a Sequence Write pattern that writes 0 to 179 LCA in order for loops)\n");
+    printf("\n");
+    printf("    2. Random Write. (Perform a pre-condition by writing all positions from 0 to 179),\n");
+    printf("       first in order (SEQ Write 100%%), then Random Write for loop.\n");    
+    printf("\n");
+    printf("    3. 0 Position Write. (Add a single point write pattern.\n");
+    printf("       First, perform a pre-condition by writing all positions from 0 to 179 in order,\n");
+    printf("       then continuously write to LCA position 0 for loops.)\n");
+    printf("\n");
+    printf(": ");
+
+    int select = 0;
+    unsigned int testCase = 0;
+    scanf("%d", &select);
+
+    switch (select)
+    {
+    case 1:        
+        printf("You select the [Sequence Write] Pattertn.\n");
+        testCase = 1;
+        break;
+    case 2:
+        printf("You select the [Random Write] Pattertn.\n");
+        testCase = 2;
+        break;
+    case 3:
+        printf("You select the [0 Position Write] Pattertn.\n");
+        testCase = 3;
+        break;
+    default:
+        printf("YOU DON'T select any pattern, it will test [[Sequence Write] Pattern !!!\n");
+        testCase = 1;
+        break;
+    }
+
+
+    //---------------------------------------------------------------
+    // Initial FTL and related flow.
+    initializeFTL();
+    printf("[Done] Initial FTL Table and Parameters Done.\n");
+    // Present Virtual Block Status
+    printVBStatus();
+    
+    //---------------------------------------------------------------
+    // Fixed LCA Length for Golden Write Data.
+    WriteData glodenWriteData[LCA_RANGE];
+    initializeWriteGoldenData(glodenWriteData, LCA_RANGE);
+
+    //---------------------------------------------------------------
+    // Pre-Condition
+    sequenceWrite_PreCondition(glodenWriteData, 0, LCA_RANGE);
+    printf("[Done] Sequence Write Pre-Condition Done.\n");
+    // Present Virtual Block Status
+    printVBStatus();
+    // system("PAUSE");
+    
+    //---------------------------------------------------------------
+    // Do Write Test
+    int result = 0;
+    switch (testCase)
+    {
+    case 1:
+        result = sequenceWrite_Test(glodenWriteData, 0, LCA_RANGE);
+        if (result != 0) {
+            printf("[Fail] Sequence Write Flow had Error !!!\n");
+        }
+        break;
+    case 2:
+        result = randomWrite_Test(glodenWriteData, 0, LCA_RANGE);
+        if (result != 0) {
+            printf("[Fail] Random Write Flow had Error !!!\n");
+        }        
+        break;
+    case 3:
+        result = pointWrite_Test(glodenWriteData, 0);
+        if (result != 0) {
+            printf("[Fail] Point Write Flow had Error !!!\n");
+        }
+        break;
+    default:
+        printf("[Info] There are NO Test have to Excute !!!\n");
+        break;
+    }    
+    
+    printf("[Finished] Write Test Done.\n");    
+    // Write P2L Table data to csv.
+    writeP2LTableToCSV();    
+    // Present Virtual Block Status    
+    printVBStatus();        
+    // Read Flash Data to compare Golden Write data.
+    // allocate a temp array for rtead P2L data.
+    unsigned short* tempReadData = (unsigned short*)malloc(LCA_RANGE * sizeof(unsigned short));
+    unsigned int i = 0;    
+    
+    // --------------------------------------------------------------------------------------------
+    // Read data from flash to temp buffer.
+    for (i; i < LCA_RANGE; i++) {
+        tempReadData[i] = readDataFromFlash(i, 1);
+    } 
+
+    // --------------------------------------------------------------------------------------------
+    // Compare to golden buffer table.
+    for (i; i < LCA_RANGE; i++) {
+        if  (tempReadData[i] != glodenWriteData[i].data) {
+            printf("[Fail] Data Compare Fail in LCA: %u, Data Read: %hu, Golden Data: %hu\n", i, tempReadData[i], glodenWriteData[i].data);
+            result = -1;
+        }
+    }
+
+    if (result == 0) {
+        printf("[Sucess] All data is match\n");
+    } else if (result == -1) {
+        printf("[Fail] Data mismatch after write test !!!\n");
+    }    
+    // Free Momery
+    free(tempReadData);
+    
     system("PAUSE");
 
     return 0;
