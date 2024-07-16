@@ -8,7 +8,7 @@
                 "-g",
                 "${workspaceFolder}/main.c",
                 "${workspaceFolder}/ftl.c",
-                "${workspaceFolder}/freeVB.c",
+                "${workspaceFolder}/vblist.c",
                 "-o",
                 "${workspaceFolder}/bin/main.exe"
             ],

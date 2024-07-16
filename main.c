@@ -2,31 +2,30 @@
 #include <stdlib.h>
 #include <time.h>
 #include <string.h>
-#include "ftl.h"
+#include <math.h>
 #include <unistd.h>
 #include <windows.h>
+
+#include "ftl.h"
 #include "freeVB.h"
 
-// Write Command
+// Host write data struct
 typedef struct {
-    unsigned int logicalPage;   //LCA
-    unsigned short data;        //Write Data
-    unsigned int length;        //length in LCA
-} WriteCommand;
-
-// Write Data Info Array
-typedef struct {
-    unsigned int logicalPage;
+    unsigned int logical_page;
     unsigned short data;
-} WriteData;
+    unsigned int logical_write_count;
+} host_write_data_t;
 
-#define NUM_WRITES 2000
+#define NUM_WRITES 10000
 #define NUM_LOOPS 100
-#define LCA_RANGE 180 //(TOTAL_BLOCKS * PAGES_PER_BLOCK * OP_SIZE)
-// #define DATA_SIZE 4 // every page's user data is 4 bytes.
-// #define MAX_LBA_LENGTH 4 // every command length LBA Size is 4 pages.
+// #define HOST_WRITE_RANGE (PAGES_PER_BLOCK * TOTAL_DIES * BLOCKS_PER_DIE * OP_SIZE)
+#define HOST_WRITE_RANGE ((TOTAL_VB_PAGES * (BLOCKS_PER_DIE) * 100) / (100 + OP_SIZE))
 
-unsigned int generate_complex_seed() {
+// global variable.
+unsigned int g_host_write_range;
+
+unsigned int generate_complex_seed() 
+{
     unsigned int seed = (unsigned int)time(NULL);
     seed ^= (unsigned int)clock();
     seed ^= (unsigned int)rand();
@@ -36,48 +35,55 @@ unsigned int generate_complex_seed() {
 }
 
 // Initialize Golden Write Data. (data is logical page)
-void initializeWriteGoldenData(WriteData *glodenWriteData, unsigned int lcaRange) {
-   // unsigned int length = sizeof(glodenWriteData);
-   for (unsigned int i = 0; i < lcaRange; i++) {
-        glodenWriteData[i].logicalPage = i;
-        glodenWriteData[i].data = i;
+void initialize_data(host_write_data_t *write_golden_data, unsigned int host_write_range) 
+{
+   // unsigned int length = sizeof(write_golden_data);
+   for (unsigned int i = 0; i < host_write_range; i++) {
+        write_golden_data[i].logical_page = i;
+        write_golden_data[i].data = i;
+        write_golden_data[i].logical_write_count = 0;
    }
 }
 
-// Write Pattern Cases
-// Add Sequence Write's Pattern，write 0 ~ 179 LCA.
-// Add position Write's Pattern，Pre-condition write 0 ~ 179 after 0 ~ 179. after full range,
-// Direct to write single LCA 0 address.
-// Modify Random write's Pattern，Before write, do Pre-Condition first.
 // ------------------------------------------------------------------------------------------------
-// [Pre-Condition] Add a Sequence Write pattern that writes 0 to 179 LCA in order for loops.
-int sequenceWrite_PreCondition(WriteData *glodenWriteData, unsigned int start, unsigned int end) {    
+// [Pre-Condition] Add a Sequence Write pattern that writes 0 to end of LCA range in order for loops.
+int precondition_sequence_write(host_write_data_t *write_golden_data, unsigned int start, unsigned int end) 
+{    
     for (unsigned int i = start; i < end; i++) {
-        writeDataToFlash(i, 1, glodenWriteData[i].data);        
+        // increase write count.
+        write_golden_data[i].logical_write_count++;
+        // write data to flash.
+        ftl_write_data_flow(i, 1, write_golden_data[i].data, write_golden_data[i].logical_write_count);        
     }
 
     return 0;
 }
 
 // ------------------------------------------------------------------------------------------------
-// [Write Test] Add a Sequence Write pattern that writes 0 to 179 LCA in order for loops.
-int sequenceWrite_Test(WriteData *glodenWriteData, unsigned int start, unsigned int end) {
+// [Sequence Write] Add a Sequence Write pattern that writes 0 to end of LCA range in order for loops.
+int sequence_write(host_write_data_t *write_golden_data, unsigned int start, unsigned int end) 
+{
     for (unsigned int loop = 0; loop < NUM_LOOPS; loop++) {
         for (unsigned int i = start; i < end; i++) {
-            writeDataToFlash(i, 1, glodenWriteData[i].data);            
+            // increase write count.
+            write_golden_data[i].logical_write_count++;
+            // write data to flash.
+            ftl_write_data_flow(i, 1, write_golden_data[i].data, write_golden_data[i].logical_write_count);
         }
-        printf("[Loop: %u] Sequence Write Test Done.\n", loop);
+
+        printf("=======================================================================================\n");
+        printf("[Loop: %u] Sequence Write Test Done.\n", loop + 1);
+        printf("=======================================================================================\n");
     }
+
     return 0;
 }
 
 // ------------------------------------------------------------------------------------------------
-// [Write Test] Perform a pre-condition by writing all positions from 0 to 179 first in order (SEQ Write 100%),
+// [Random Write] Perform a pre-condition by writing all positions from 0 to 179 first in order (SEQ Write 100%),
 // then Random Write for loop.
-int randomWrite_Test(WriteData *glodenWriteData, unsigned int start, unsigned int end) {
-    // random seed.
-    srand(generate_complex_seed());
-
+int random_write(host_write_data_t *write_golden_data, unsigned int start, unsigned int end) 
+{
     // Determine start and end parameters is reasonable. 
     if (start > end) {
         printf("[Fail] The number START is greater than the number END !!!\n");
@@ -87,13 +93,23 @@ int randomWrite_Test(WriteData *glodenWriteData, unsigned int start, unsigned in
         return -2;
     }
 
-    unsigned int lcaRange = end - start;
+    // random seed.
+    srand(generate_complex_seed());
 
+    unsigned int random_write_range = end - start;
     for (unsigned int loop = 0; loop < NUM_WRITES; loop++) {
-        unsigned int lca = start + (rand() % (lcaRange));
-        writeDataToFlash(lca, 1, glodenWriteData[lca].data);        
+        unsigned int host_idx = start + (rand() % (random_write_range));
+        // increase write count.
+        write_golden_data[host_idx].logical_write_count++;
+        // write data to flash.
+        ftl_write_data_flow(host_idx, 1, write_golden_data[host_idx].data, write_golden_data[host_idx].logical_write_count);
+
+        if (loop % 100 == 0 && loop != 0) {
+            printf("=======================================================================================\n");
+            printf("[Loop: %u] Random Write Test Done.\n", loop + 1);
+            printf("=======================================================================================\n");
+        }
     }
-    printf("[Loops: 1000] Random Write LCA: %u Data Done.\n");
 
     return 0;
 }
@@ -101,139 +117,197 @@ int randomWrite_Test(WriteData *glodenWriteData, unsigned int start, unsigned in
 // ------------------------------------------------------------------------------------------------
 // [Write Test] Add a 0 position write pattern. First, perform a pre-condition by writing all positions from 0 to 179 in order, 
 // then continuously write to LCA position 0 for loops.
-int pointWrite_Test(WriteData *glodenWriteData, unsigned int logicalPageAddress) {
+int single_point_write(host_write_data_t *write_golden_data, unsigned int write_address)
+{
     for (unsigned int loop = 0; loop < NUM_WRITES; loop++) {
-        writeDataToFlash(logicalPageAddress, 1, glodenWriteData[logicalPageAddress].data);        
-    }
-    printf("[Loop: 1000] Position Write LCA: %u Data Done.\n", logicalPageAddress);
+        // increase write count.
+        write_golden_data[write_address].logical_write_count++;
+        // write data to flash.
+        ftl_write_data_flow(write_address, 1, write_golden_data[write_address].data, write_golden_data[write_address].logical_write_count);
+
+        if (loop % 100 == 0 && loop != 0) {
+            printf("=======================================================================================\n");
+            printf("[Loop: %u] single point Write Test Done.\n", loop + 1);
+            printf("=======================================================================================\n");
+        }
+    }    
+
     return 0;
 }
 
 int main(int argc, char **argv) {
-    // --------------------------------------------------------------------------------------------
-    // Select Test Pattern.
-    printf("=======================================================================================\n");
-    printf("                             Start to Basic FTL Test\n");
-    printf("=======================================================================================\n");
-    printf("Please Select Test Pattern:\n");
-    printf("    1. Sequence Write. (Add a Sequence Write pattern that writes 0 to 179 LCA in order for loops)\n");
-    printf("\n");
-    printf("    2. Random Write. (Perform a pre-condition by writing all positions from 0 to 179),\n");
-    printf("       first in order (SEQ Write 100%%), then Random Write for loop.\n");    
-    printf("\n");
-    printf("    3. 0 Position Write. (Add a single point write pattern.\n");
-    printf("       First, perform a pre-condition by writing all positions from 0 to 179 in order,\n");
-    printf("       then continuously write to LCA position 0 for loops.)\n");
-    printf("\n");
-    printf(": ");
-
+    // Initial Parameters
+    g_host_write_range = floor(HOST_WRITE_RANGE);
     int select = 0;
-    unsigned int testCase = 0;
-    scanf("%d", &select);
 
-    switch (select)
-    {
-    case 1:        
-        printf("You select the [Sequence Write] Pattertn.\n");
-        testCase = 1;
-        break;
-    case 2:
-        printf("You select the [Random Write] Pattertn.\n");
-        testCase = 2;
-        break;
-    case 3:
-        printf("You select the [0 Position Write] Pattertn.\n");
-        testCase = 3;
-        break;
-    default:
-        printf("YOU DON'T select any pattern, it will test [[Sequence Write] Pattern !!!\n");
-        testCase = 1;
-        break;
-    }
+    do {
+        // --------------------------------------------------------------------------------------------
+        // Select Test Pattern.
+        printf("=======================================================================================\n");
+        printf("                             Start to Basic FTL Test\n");
+        printf("=======================================================================================\n");
+        printf("Please Select Test Pattern:\n");
+        printf("    0. Eixt.\n");
+        printf("\n");
+        printf("    1. Sequence Write. (Add a Sequence Write pattern that writes 0 to %u LCA in order for loops)\n", g_host_write_range - 1);
+        printf("\n");
+        printf("    2. Random Write. (Perform a pre-condition by writing all positions from 0 to %u),\n", g_host_write_range - 1);
+        printf("       first in order (SEQ Write 100%%), then Random Write for loop.\n");    
+        printf("\n");
+        printf("    3. 0 Position Write. (Add a single point write pattern.\n");
+        printf("       First, perform a pre-condition by writing all positions from 0 to %u in order,\n", g_host_write_range - 1);
+        printf("       then continuously write to LCA position 0 for loops.)\n");
+        printf("\n");        
+        printf("\n");
+        printf(": ");
+        
+        unsigned int testCase = 0;
+        scanf("%d", &select);
 
-
-    //---------------------------------------------------------------
-    // Initial FTL and related flow.
-    initializeFTL();
-    printf("[Done] Initial FTL Table and Parameters Done.\n");
-    // Present Virtual Block Status
-    printVBStatus();
-    
-    //---------------------------------------------------------------
-    // Fixed LCA Length for Golden Write Data.
-    WriteData glodenWriteData[LCA_RANGE];
-    initializeWriteGoldenData(glodenWriteData, LCA_RANGE);
-
-    //---------------------------------------------------------------
-    // Pre-Condition
-    sequenceWrite_PreCondition(glodenWriteData, 0, LCA_RANGE);
-    printf("[Done] Sequence Write Pre-Condition Done.\n");
-    // Present Virtual Block Status
-    printVBStatus();
-    // system("PAUSE");
-    
-    //---------------------------------------------------------------
-    // Do Write Test
-    int result = 0;
-    switch (testCase)
-    {
-    case 1:
-        result = sequenceWrite_Test(glodenWriteData, 0, LCA_RANGE);
-        if (result != 0) {
-            printf("[Fail] Sequence Write Flow had Error !!!\n");
+        if (select == 0) {
+            return 0;
         }
-        break;
-    case 2:
-        result = randomWrite_Test(glodenWriteData, 0, LCA_RANGE);
-        if (result != 0) {
-            printf("[Fail] Random Write Flow had Error !!!\n");
-        }        
-        break;
-    case 3:
-        result = pointWrite_Test(glodenWriteData, 0);
-        if (result != 0) {
-            printf("[Fail] Point Write Flow had Error !!!\n");
-        }
-        break;
-    default:
-        printf("[Info] There are NO Test have to Excute !!!\n");
-        break;
-    }    
-    
-    printf("[Finished] Write Test Done.\n");    
-    // Write P2L Table data to csv.
-    writeP2LTableToCSV();    
-    // Present Virtual Block Status    
-    printVBStatus();        
-    // Read Flash Data to compare Golden Write data.
-    // allocate a temp array for rtead P2L data.
-    unsigned short* tempReadData = (unsigned short*)malloc(LCA_RANGE * sizeof(unsigned short));
-    unsigned int i = 0;    
-    
-    // --------------------------------------------------------------------------------------------
-    // Read data from flash to temp buffer.
-    for (i; i < LCA_RANGE; i++) {
-        tempReadData[i] = readDataFromFlash(i, 1);
-    } 
 
-    // --------------------------------------------------------------------------------------------
-    // Compare to golden buffer table.
-    for (i; i < LCA_RANGE; i++) {
-        if  (tempReadData[i] != glodenWriteData[i].data) {
-            printf("[Fail] Data Compare Fail in LCA: %u, Data Read: %hu, Golden Data: %hu\n", i, tempReadData[i], glodenWriteData[i].data);
-            result = -1;
+        switch (select)
+        {
+        case 1:        
+            printf("You select the [Sequence Write] Pattertn.\n");
+            testCase = 1;
+            break;
+        case 2:
+            printf("You select the [Random Write] Pattertn.\n");
+            testCase = 2;
+            break;
+        case 3:
+            printf("You select the [0 Position Write] Pattertn.\n");
+            testCase = 3;
+            break;
+        default:
+            printf("YOU DON'T select any pattern !!!\n");
+            testCase = 0;
+            break;
         }
-    }
 
-    if (result == 0) {
-        printf("[Sucess] All data is match\n");
-    } else if (result == -1) {
-        printf("[Fail] Data mismatch after write test !!!\n");
-    }    
-    // Free Momery
-    free(tempReadData);
+        // There are no Test Case to Excute
+        if (testCase == 0) {
+            continue;
+        }
+
+        //---------------------------------------------------------------
+        // Initial FTL and related flow.
+        printf("----->\n");
+        ftl_initialize();        
+        printf("[Done] Initial FTL Table and Parameters Done.\n");
+        printf("<-----\n");
+        // Present Virtual Block Status
+        ftl_print_vb_status();
+        
+        //---------------------------------------------------------------
+        // Fixed LCA Length for Golden Write Data.
+        host_write_data_t write_golden_data[g_host_write_range];
+        initialize_data(write_golden_data, g_host_write_range);
+
+        //---------------------------------------------------------------
+        // Pre-Condition
+        printf("----->\n");
+        precondition_sequence_write(write_golden_data, 0, g_host_write_range);
+        printf("[Done] Pre-Condition Done.\n");
+        printf("<-----\n");
+        // Present Virtual Block Status
+        ftl_print_vb_status();
+        // system("PAUSE");
+        
+        //---------------------------------------------------------------
+        // Write Test Case
+        printf("----->\n");
+        int result = 0;
+        switch (testCase) {
+        case 1:
+            result = sequence_write(write_golden_data, 0, g_host_write_range);
+            if (result != 0) {
+                printf("[Fail] Sequence Write Flow had Error !!!\n");
+            }
+            break;
+        case 2:
+            result = random_write(write_golden_data, 0, g_host_write_range);
+            if (result != 0) {
+                printf("[Fail] Random Write Flow had Error !!!\n");
+            }        
+            break;
+        case 3:
+            result = single_point_write(write_golden_data, 0);
+            if (result != 0) {
+                printf("[Fail] Point Write Flow had Error !!!\n");
+            }
+            break;
+        default:
+            printf("[Info] There are NO Test have to Excute !!!\n");
+            break;
+        }            
+        printf("[Done] Write Test Done.\n");
+        printf("<-----\n");
+
+        // Write P2L Table data to csv.
+        printf("----->\n");
+        ftl_write_vb_table_detail_to_csv();        
+        printf("[Done] Write vb data to csv done.\n");
+        printf("<-----\n");
+        
+        // Present Virtual Block Status
+        ftl_print_vb_status();        
+                
+        // Read Flash Data to compare Golden Write data.
+        // allocate a temp array for rtead P2L data.
+        printf("----->\n");
+        unsigned short* tempReadData = (unsigned short*)malloc(g_host_write_range * sizeof(unsigned short));
+        unsigned short* tempReadWriteCount = (unsigned short*)malloc(g_host_write_range * sizeof(unsigned short));
+        unsigned int i = 0;                    
+        printf("[In-Progress] Comparing data......\n");        
+        // --------------------------------------------------------------------------------------------
+        // Read data from flash to temp buffer.
+        for (i; i < g_host_write_range; i++) {
+            tempReadData[i] = ftl_read_data_flow(i, 1);
+            tempReadWriteCount[i] = ftl_read_page_write_count(i);
+        } 
+
+        // --------------------------------------------------------------------------------------------
+        // Compare to golden buffer table.
+        for (i; i < g_host_write_range; i++) {        
+            if  (tempReadData[i] != write_golden_data[i].data) {
+                printf("[Fail] Data Compare Fail in LCA: %u, Data Read: %hu, Golden Data: %hu\n", i, tempReadData[i], write_golden_data[i].data);
+                result = -1;
+            }
+
+            if  (tempReadWriteCount[i] != write_golden_data[i].logical_write_count) {
+                printf("[Fail] Write Counts Compare Fail in LCA: %u, Data Read: %hu, Golden Data: %hu\n", i, tempReadWriteCount[i], write_golden_data[i].logical_write_count);
+                result = -2;
+            }
+        }
+
+        if (result == 0) {
+            printf("[Sucess] Compared data done.\n");
+            printf("<-----\n");
+        } else if (result == -1) {
+            printf("[Fail] Data mismatch after write test !!!\n");
+        } else if (result == -2) {
+            printf("[Fail] Write Counts mismatch after write test !!!\n");
+        }
+        
+        // Free Momery
+        free(tempReadData);
+        free(tempReadWriteCount);
+        
+        printf("\n\n");
+        printf("-----------------------\n");
+        printf("Test Summary:\n");      
+        // Total Erase Count
+        printf("Total Erase Count is: %u\n", g_total_erase_count);        
+        // Total GC Count        
+        printf("Total GC Count is: %u\n", g_total_gc_count);
+        printf("----- End of test -----\n");
+        printf("\n\n");
     
-    system("PAUSE");
+    } while (select != 0);
 
     return 0;
 }
