@@ -36,6 +36,10 @@ void ftl_initialize()
     g_total_erase_count = 0;
     // Record total gc count for all VB.
     g_total_gc_count = 0;
+    // records nand write size
+    g_nand_write_size = 0;
+    // records host write size
+    g_host_write_size = 0;
     
     // Get current writing vb from free vb list.
     g_writing_vb = vb_get(&g_free_vb_list);
@@ -56,7 +60,7 @@ void ftl_initialize()
 int ftl_update_table_L2P(unsigned int logical_page, unsigned int physical_page)
 {        
     if (g_l2p_table[logical_page].logical_page_index != logical_page) {
-        printf(" L2P Table logical Address initial fail.\n");
+        printf("[Fail][ftl_update_table_L2P] L2P Table logical Address initial fail.\n");
         return -1;
     }
 
@@ -76,7 +80,7 @@ int ftl_update_table_L2P(unsigned int logical_page, unsigned int physical_page)
 int ftl_update_table_P2L(unsigned int physical_page, unsigned int logical_page, unsigned short data, unsigned short logical_address_write_count)
 {
     if (g_p2l_table[physical_page].physical_page_index != physical_page) {
-        printf("P2L Table Physical Address initial fail.\n");
+        printf("[Fail][ftl_update_table_P2L] P2L Table Physical Address initial fail.\n");
         return -1;
     }
 
@@ -88,6 +92,8 @@ int ftl_update_table_P2L(unsigned int physical_page, unsigned int logical_page, 
     // Increase valid count
     unsigned int target_vb = physical_page / (TOTAL_VB_PAGES);
     g_vb_status[target_vb].valid_count++;
+    // Increse nand write count.
+    g_nand_write_size++;
 
     return 0;
 }
@@ -152,9 +158,7 @@ int ftl_determine_wear_leveling()
 
 // Write Data to Flash
 int ftl_write_data_flow(unsigned int logical_page, unsigned int length, unsigned short data, unsigned short write_count)
-{        
-    // static unsigned int minimum_limit_free_vb = 9;
-
+{            
     if (g_remaining_pages_to_write == 0) {
         // set vb status to WRITTEN.
         g_vb_status[g_writing_vb].program_status = WRITTEN;
@@ -197,22 +201,28 @@ int ftl_write_data_flow(unsigned int logical_page, unsigned int length, unsigned
 
     // Update L2P Table    
     if (ftl_update_table_L2P(logical_page, writting_physical_page) != 0) {
-        printf("[Fail][] ftl_update_table_L2P fail in logical_page: %u !!!\n", logical_page);
+        printf("[Fail][ftl_update_table_L2P] fail in logical_page: %u !!!\n", logical_page);
+        system("pause");
         return -1;
     }
 
     // Update P2L Table
     if (ftl_update_table_P2L(writting_physical_page, logical_page, data, write_count)) {
-        printf("ftl_update_table_P2L fail in writting_physical_page: %u !!!\n", writting_physical_page);
+        printf("[Fail][ftl_update_table_P2L] fail in writting_physical_page: %u !!!\n", writting_physical_page);
+        system("pause");
         return -1;
     }
    
     // Calc remaining Write Pages.
     g_remaining_pages_to_write = g_remaining_pages_to_write - length;
     if (g_remaining_pages_to_write > TOTAL_VB_PAGES) {
-        printf("[ASSERT] g_remaining_pages_to_write > 36 in writting_physical_page: %u !!!!!\n", writting_physical_page);
+        printf("[ASSERT] g_remaining_pages_to_write > %u in writting_physical_page: %u !!!!!\n", TOTAL_VB_PAGES, writting_physical_page);
+        system("pause");
         return -1;
     }
+
+    // increase host write count.
+    g_host_write_size++;
 
     return 0;
 }
@@ -407,6 +417,8 @@ int ftl_garbage_collection_new(int wear_leveling)
                 g_l2p_table[tmp_logical_idx].physical_page_address = gc_target_page_idx;
                 // update VBStatus Table, Write Data for valid page + 1
                 g_vb_status[g_gc_target_vb].valid_count++;
+                // Increse nand write count.
+                g_nand_write_size++;
                 // update VBStatus Table, Original nand Data for valid page - 1
                 g_vb_status[tmp_current_gc_source_vb].valid_count--;
                 
@@ -599,13 +611,43 @@ void ftl_print_vb_status()
     printf("==============================================================\n");
 }
 
+int ftl_write_waf_record_to_csv(char* test_case, waf_records_t* record, unsigned int size)
+{
+    char filename[64];
+    snprintf(filename, sizeof(filename), "./WAF_%s_OP_%02d.csv", test_case, OP_SIZE);
+
+    FILE *file = fopen(filename, "w");
+    if (file == NULL) {
+        perror("Failed to open file");
+        return -1;
+    }
+
+     // Write excel title.
+    fprintf(file, "Loop,Nand Write,Host Write,WAF\n");
+
+    // Write down row data.
+    for (unsigned int i = 0; i < size; i++)
+    {
+        fprintf(file, "%u,%u,%u,%lf",
+                record[i].loop,
+                record[i].nand_write,
+                record[i].host_write,
+                record[i].waf                
+            );
+        fprintf(file, "\n");
+    }
+
+    fclose(file);
+
+    return 0;
+}
+
 int ftl_write_vb_table_detail_to_csv()
 {
+    // Format file name reference date and time.
     time_t now = time(NULL); // Get current time
     struct tm *t = localtime(&now); // localization time
-
-    char filename[64];
-    // Format file name.
+    char filename[64];    
     snprintf(filename, sizeof(filename), "./P2L-Table_%04d%02d%02d_%02d%02d%02d.csv",
              t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
              t->tm_hour, t->tm_min, t->tm_sec);
@@ -621,33 +663,31 @@ int ftl_write_vb_table_detail_to_csv()
     unsigned int* pages_valid_status = (unsigned int*)malloc(total_pages * sizeof(unsigned int));
     memset(pages_valid_status, 0, total_pages);
 
-    unsigned int totalValidPages = 0;
-    unsigned int totalNandPages = total_pages;
-
+    unsigned int total_valid_pages = 0;    
     for (unsigned int i = 0; i < total_pages; i++) 
     {
-        unsigned int tempLogFromPhy = g_p2l_table[i].logical_page_address;
-        if (tempLogFromPhy != INVALID) {
-            unsigned int tempPhyFromLog = g_l2p_table[tempLogFromPhy].physical_page_address;
-            if (i == tempPhyFromLog) {
+        unsigned int tmp_logical_from_phy = g_p2l_table[i].logical_page_address;
+        if (tmp_logical_from_phy != INVALID) {
+            unsigned int tmp_physical_from_log = g_l2p_table[tmp_logical_from_phy].physical_page_address;
+            if (i == tmp_physical_from_log) {
                 pages_valid_status[i] = 1;
-                totalValidPages++;
+                total_valid_pages++;
             } 
             else {
                 pages_valid_status[i] = 0;
             }
         }
         else {                
-            pages_valid_status[i] = 0;
-            totalNandPages--;
+            pages_valid_status[i] = 0;            
         }
     }
 
     // Calc WAF
-    double waf = (double)totalNandPages/totalValidPages;
+    double waf = (double)g_nand_write_size/g_host_write_size;
 
     // Write Summary
-    fprintf(file, ",WAF:,%lf,,Total Valid Pages:,%hu",waf, totalValidPages);
+    fprintf(file, ",WAF:,%lf",waf);
+    fprintf(file, ",,,,Total Valid Pages:,%u", total_valid_pages);
     fprintf(file, "\n");
     fprintf(file, "\n");
 
@@ -667,7 +707,14 @@ int ftl_write_vb_table_detail_to_csv()
     // Write down row data.
     for (unsigned int i = 0; i < TOTAL_BLOCKS * PAGES_PER_BLOCK; i++)
     {
-        fprintf(file, "%u,%u,%hu,%hu,%hu,%hu", g_p2l_table[i].physical_page_index, g_p2l_table[i].logical_page_address, g_p2l_table[i].data, g_p2l_table[i].logical_address_write_count, g_p2l_table[i].physical_page_write_count, pages_valid_status[i]);
+        fprintf(file, "%u,%u,%hu,%hu,%hu,%hu",
+                g_p2l_table[i].physical_page_index,
+                g_p2l_table[i].logical_page_address,
+                g_p2l_table[i].data, 
+                g_p2l_table[i].logical_address_write_count,
+                g_p2l_table[i].physical_page_write_count,
+                pages_valid_status[i]
+            );
         fprintf(file, "\n");
     }
     

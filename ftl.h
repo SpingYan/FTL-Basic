@@ -42,7 +42,7 @@ Flash Geomerty B17A
 #define TOTAL_BLOCKS (TOTAL_DIES * BLOCKS_PER_DIE)
 #define TOTAL_PAGES (TOTAL_BLOCKS * PAGES_PER_BLOCK)
 
-#define OP_SIZE 7 // Over Provisioning size
+#define OP_SIZE 28 // Over Provisioning size
 
 #define INVALID 0xFFFFFFFF
 #define INVALID_SHORT 0xFFFF
@@ -70,6 +70,14 @@ typedef struct {
     unsigned short logical_address_write_count; //logical address Write counts.
     unsigned short physical_page_write_count; //Write this physical page counts.
 } physical_page_mapping_table_t;
+
+// WAF value records
+typedef struct {
+    unsigned int loop;
+    unsigned int nand_write;
+    unsigned int host_write;
+    double waf;
+} waf_records_t;
 
 // Written enumerate list
 typedef enum {
@@ -114,6 +122,11 @@ unsigned int g_remaining_pages_to_write;
 unsigned int g_gc_target_vb;
 // record how many pages can be program (gc) on target VB.
 unsigned int g_remaining_pages_to_gc;
+// records nand write size
+unsigned int g_nand_write_size;
+// records host write size
+unsigned int g_host_write_size;
+
 //=====================================================================================================================
 
 // initial FTL related parameters.
@@ -128,8 +141,11 @@ int ftl_get_new_vb_to_gc();
 unsigned short ftl_read_data_flow(unsigned int logical_page, unsigned int length);
 // Read LCA Counts from Flash for single LCA.
 unsigned short ftl_read_page_write_count(unsigned int logical_page);
-// Save detail table and vb status to scv file.
+// Save detail table and vb status to csv file.
 int ftl_write_vb_table_detail_to_csv();
+// Save waf value to csv file.
+int ftl_write_waf_record_to_csv(char* test_case, waf_records_t* record, unsigned int size);
+
 // Update L2P Table
 int ftl_update_table_L2P(unsigned int logical_page, unsigned int physical_page);
 // Update P2L Table
@@ -138,6 +154,7 @@ int ftl_update_table_P2L(unsigned int physical_page, unsigned int logical_page, 
 int ftl_garbage_collection_new(int gc_mode);
 // Do Garbage Collect Flow (wear-leveling = 0: Common GC, 1: Wear-Leveling)
 // int ftl_garbage_collection(unsigned int wear_leveling);
+
 // Determine do wear-leveling or not
 int ftl_determine_wear_leveling();
 // Scan if there are have 0 valid VB.
