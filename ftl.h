@@ -33,8 +33,8 @@ Flash Geomerty B17A
 // #define PAGE_SIZE 4096 //Bytes
 
 #define TOTAL_DIES 4 // total dies
-#define BLOCKS_PER_DIE 500 // blocks in 1 die
-#define PAGES_PER_BLOCK 3 // pages in 1 block
+#define BLOCKS_PER_DIE 200 // blocks in 1 die
+#define PAGES_PER_BLOCK 9 // pages in 1 block
 #define PAGE_SIZE 16384 //Bytes
 
 #define BLOCK_SIZE (PAGES_PER_BLOCK * PAGE_SIZE) //Bytes
@@ -42,7 +42,7 @@ Flash Geomerty B17A
 #define TOTAL_BLOCKS (TOTAL_DIES * BLOCKS_PER_DIE)
 #define TOTAL_PAGES (TOTAL_BLOCKS * PAGES_PER_BLOCK)
 
-#define OP_SIZE 28 // Over Provisioning size
+#define OP_SIZE 7 // Over Provisioning size
 
 #define INVALID 0xFFFFFFFF
 #define INVALID_SHORT 0xFFFF
@@ -86,6 +86,8 @@ typedef enum {
     WRITTEN,
     GC_ING,
     GC_TARGET,
+    WL_ING,
+    WL_TARGET,
 } program_status_enum_t;
 
 // Virtual Block Status: Record Virtual Block's valid Pages and erase count.
@@ -94,6 +96,13 @@ typedef struct {
     unsigned int erase_count;
     program_status_enum_t program_status;
 } virtual_block_status_t;
+
+// Host write data struct
+typedef struct {
+    unsigned int logical_page;
+    unsigned short data;
+    unsigned int logical_write_count;
+} host_write_data_t;
 
 // Table 1: L2P table (Logical page address to physical page address table)
 logical_page_mapping_table_t g_l2p_table[TOTAL_BLOCKS * PAGES_PER_BLOCK];
@@ -108,12 +117,24 @@ virtual_block_status_t g_vb_status[BLOCKS_PER_DIE];
 // Global Varible
 // Total Erase Count
 unsigned int g_total_erase_count;
+// Min Erase Count
+unsigned int g_min_erase_count;
+// Max Erase Count
+unsigned int g_max_erase_count;
+// Avg Erase Count
+double g_avg_erase_count;
+
 // Total GC Count
 unsigned int g_total_gc_count;
+// Total Wear-Leveling Count
+unsigned int g_total_wl_count;
+
 // Free VB List
 vb_list_t g_free_vb_list;
 // Written VB List
 // vb_list_t g_written_vb_list;
+// global variable.
+unsigned int g_host_write_range;
 // Current writing target VB index.
 unsigned int g_writing_vb;
 // record how many pages can be program (write) on target VB.
@@ -122,6 +143,10 @@ unsigned int g_remaining_pages_to_write;
 unsigned int g_gc_target_vb;
 // record how many pages can be program (gc) on target VB.
 unsigned int g_remaining_pages_to_gc;
+// Current doing WL target VB index.
+unsigned int g_wl_target_vb;
+// record how many pages can be program (wl) on target VB.
+unsigned int g_remaining_pages_to_wl;
 // records nand write size
 unsigned int g_nand_write_size;
 // records host write size
@@ -142,7 +167,7 @@ unsigned short ftl_read_data_flow(unsigned int logical_page, unsigned int length
 // Read LCA Counts from Flash for single LCA.
 unsigned short ftl_read_page_write_count(unsigned int logical_page);
 // Save detail table and vb status to csv file.
-int ftl_write_vb_table_detail_to_csv();
+int ftl_write_vb_table_detail_to_csv(char* test_case);
 // Save waf value to csv file.
 int ftl_write_waf_record_to_csv(char* test_case, waf_records_t* record, unsigned int size);
 
@@ -163,5 +188,10 @@ int ftl_scan_written_vb_to_erase();
 void ftl_erase_vb(unsigned int vb_index);
 // Print vb status
 void ftl_print_vb_status();
+
+// Compare golden data
+int ftl_compare_write_data(host_write_data_t* write_golden_data, unsigned int data_size);
+// move valid page to target page for wl or gc.
+void ftl_process_page(unsigned int src_page_idx, unsigned int target_vb, unsigned int* remaining_pages);
 
 #endif // FTL_H

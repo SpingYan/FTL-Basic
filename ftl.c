@@ -7,7 +7,7 @@ void ftl_initialize()
     for (unsigned int i = 0; i < TOTAL_BLOCKS * PAGES_PER_BLOCK; i++) {
         // initial L2P table data.
         g_l2p_table[i].logical_page_index = i;
-        g_l2p_table[i].physical_page_address = INVALID;        
+        g_l2p_table[i].physical_page_address = INVALID;
 
         // initial P2L table data.
         g_p2l_table[i].physical_page_index = i;        
@@ -36,6 +36,8 @@ void ftl_initialize()
     g_total_erase_count = 0;
     // Record total gc count for all VB.
     g_total_gc_count = 0;
+    // Record total wear-leveling count.
+    g_total_wl_count = 0;
     // records nand write size
     g_nand_write_size = 0;
     // records host write size
@@ -47,13 +49,17 @@ void ftl_initialize()
         ftl_print_vb_status();
     }
     
+    // Initial write vb
     g_vb_status[g_writing_vb].program_status = WRITING;
     g_remaining_pages_to_write = TOTAL_VB_PAGES;
 
-    // Get gc target vb from free list.
-    g_gc_target_vb = vb_get(&g_free_vb_list);
-    g_vb_status[g_gc_target_vb].program_status = GC_TARGET;
-    g_remaining_pages_to_gc = TOTAL_VB_PAGES;
+    // gc and wl target.
+    g_gc_target_vb = INVALID;
+    g_wl_target_vb = INVALID;
+
+    // Set gc, wl remaining page is 0.
+    g_remaining_pages_to_gc = 0;
+    g_remaining_pages_to_wl = 0;    
 }
 
 // Update L2P Mapping Table
@@ -134,22 +140,51 @@ int ftl_scan_written_vb_to_erase()
     return can_erase_vb;
 }
 
+unsigned int ftl_calc_min_erase_count()
+{
+    unsigned int min_ex = 0;
+    for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
+        if (g_vb_status[i].erase_count < min_ex) {
+            min_ex = g_vb_status[i].erase_count;
+        }        
+    }
+
+    return min_ex;
+}
+
+unsigned int ftl_calc_max_erase_count()
+{
+    unsigned int max_ex = 0;
+    for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
+        if (g_vb_status[i].erase_count > max_ex) {
+            max_ex = g_vb_status[i].erase_count;
+        }        
+    }
+
+    return max_ex;
+}
+
+double ftl_calc_avg_erase_count()
+{
+    double avg_ex = (double)g_total_erase_count / BLOCKS_PER_DIE;
+    return avg_ex;
+}
+
 int ftl_determine_wear_leveling()
 {
     // Detrermine wear-leveling condition.
-    unsigned int avg_ec = g_total_erase_count / BLOCKS_PER_DIE;
-    unsigned int max_ex = 0;
+    double avg_ec = ftl_calc_avg_erase_count();
     
+    unsigned int max_ex = 0;    
     for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
         if (g_vb_status[i].program_status == WRITTEN) {
             if (g_vb_status[i].erase_count > max_ex) {
-            max_ex = g_vb_status[i].erase_count;
+                max_ex = g_vb_status[i].erase_count;
             }
-        }        
+        }
     }
     
-    if (max_ex > avg_ec + 10) {
-        ftl_garbage_collection_new(1);
+    if (max_ex > avg_ec + 5) {
         return 1;
     }        
     
@@ -178,13 +213,25 @@ int ftl_write_data_flow(unsigned int logical_page, unsigned int length, unsigned
         // Do gc for free vb is > minimum_limit_free_vb.
         // if (vb_count(&g_free_vb_list) <= minimum_limit_free_vb) {
         while (vb_count(&g_free_vb_list) <= GC_TRIGGER_VB_COUNT) {
-            printf("[GC: %u][In-Progress][garbage_collection] Prepare do common garbage collecting......\n", g_total_gc_count + 1);
+            printf("[GC: %u][In-Progress][garbage_collection] Prepare do common garbage-collecting......\n", g_total_gc_count + 1);
             ftl_garbage_collection_new(0);
             printf("[GC: %u][Done][garbage_collection] do common garbage collecting done\n\n", g_total_gc_count + 1);
             // Increase gc counts.
             g_total_gc_count++;
         }
-                
+
+        // Add wear leveling condition, check every 100 times.
+        // Do while or every total erase count more than 10 time.
+        // if (g_total_erase_count % 5 == 0 && g_total_erase_count != 0) {
+        if (ftl_determine_wear_leveling() == 1) {
+            printf("[WL: %u][In-Progress][wear_leveling] Prepare do wear-leveling......\n", g_total_wl_count + 1);
+            ftl_garbage_collection_new(1);
+            printf("[WL: %u][Done][wear_leveling] do wear-leveling done\n\n", g_total_wl_count + 1);
+            // Increase wear-leveling counts.
+            g_total_wl_count++;
+        }
+        //}
+                        
         // ----------------------------------------------------------------------------------------
         // Get new free vb to write.
         if (ftl_get_new_vb_to_write() < 0) {                      
@@ -193,8 +240,6 @@ int ftl_write_data_flow(unsigned int logical_page, unsigned int length, unsigned
             return -1;
         }
     }
-
-    // count nand write and host write.
 
     // set physical page
     unsigned int writting_physical_page = (g_writing_vb * TOTAL_VB_PAGES) + (TOTAL_VB_PAGES - g_remaining_pages_to_write);
@@ -263,10 +308,32 @@ int ftl_get_new_vb_to_gc()
     return 0;
 }
 
+// Get new vb to do wear-leveling.
+int ftl_get_new_vb_to_wl()
+{    
+    // Update gc target VB and do gc pages count.
+    // sort linked list by erase count.
+    vb_bubble_sort(&g_free_vb_list);
+
+    g_wl_target_vb = vb_get(&g_free_vb_list);
+    if (g_wl_target_vb == -1)
+    {
+        printf("[Fail][ftl_get_new_vb_to_wl] Can't find any free vb to do Wear-Leveling !!!\n");
+        ftl_print_vb_status();
+        return -1;
+    }
+
+    g_vb_status[g_wl_target_vb].program_status = WL_TARGET;
+    g_remaining_pages_to_wl = TOTAL_VB_PAGES;
+    
+    return 0;
+}
+
 // search all vb to get min erase count vb.
 unsigned int ftl_get_min_erase_count_vb()
 {
-    unsigned int min_erase_count = INVALID; // (Wear-Leveling) Minimal Erase count on vb, default is INVALID
+    // (Wear-Leveling) Minimal Erase count on vb, default is INVALID
+    unsigned int min_erase_count = INVALID;
     unsigned int tmp_vb = INVALID;
     for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
         // Search written vb
@@ -282,7 +349,7 @@ unsigned int ftl_get_min_erase_count_vb()
 }
 
 // search all vb to get min valid count vb.
-int ftl_get_min_valid_count_vb()
+unsigned int ftl_get_min_valid_count_vb()
 {
     // (for Common GC) Minimal valid count on vb, default is vb's pages
     unsigned int min_valid_count = TOTAL_VB_PAGES;
@@ -309,31 +376,61 @@ int ftl_garbage_collection_new(int wear_leveling)
     // Initial gc parameters
     // --------------------------------------------------------------------------------------------
     // Declare gc vb list.
-    vb_list_t gc_source_vb_list;
-    vb_initialize(&gc_source_vb_list);
+    vb_list_t source_vb_list;
+    vb_initialize(&source_vb_list);
     
     // flag for get new vb to gc
-    unsigned char need_get_vb = 0;
-
-    // unsigned int current_gc_source_vb = INVALID;
+    unsigned char need_get_vb = 0;    
 
     // --------------------------------------------------------------------------------------------
     // Find source vbs and calc remianing gc pages.
-    if (wear_leveling == 1) {        
+    if (wear_leveling == 1) 
+    {        
+        // total do gc valid count
+        unsigned int valid_pages_prepare_to_move = 0;
+        unsigned int first_valid_page_count = 0;
+
         // get min erase count vb.
-        unsigned int tmp_current_gc_source_vb = ftl_get_min_erase_count_vb();
-        if (tmp_current_gc_source_vb == INVALID) {
+        unsigned int tmp_current_wl_source_vb = ftl_get_min_erase_count_vb();
+        if (tmp_current_wl_source_vb == INVALID) {
             ftl_print_vb_status();
-            printf("[Fail] Get min erase count vb fail !!!\n");
+            printf("[Fail][ftl_get_min_erase_count_vb] Get min erase count vb fail !!!\n");
             return -1;
         }
+
+        // determine get new vb flag or not.
+        first_valid_page_count = g_vb_status[tmp_current_wl_source_vb].valid_count;
+        if (first_valid_page_count > g_remaining_pages_to_wl || g_remaining_pages_to_wl == 0) {
+            need_get_vb = 1;
+        }
+
+        do {
+            // Get min valid count vb.
+            unsigned int tmp_current_wl_source_vb = ftl_get_min_erase_count_vb();
+            if (tmp_current_wl_source_vb == INVALID) {
+                ftl_print_vb_status();
+                printf("[Fail][ftl_get_min_erase_count_vb] Get min valid count vb fail !!!\n"); 
+                return -1;
+            }            
+            
+            valid_pages_prepare_to_move += g_vb_status[tmp_current_wl_source_vb].valid_count;
+            // check total gc pages more than remaining pages and one new vb size or not.
+            if (need_get_vb) {
+                if (valid_pages_prepare_to_move > g_remaining_pages_to_wl + TOTAL_VB_PAGES) { break; }
+            } else {
+                if (valid_pages_prepare_to_move > g_remaining_pages_to_wl) { break; }
+            }
+            
+            g_vb_status[tmp_current_wl_source_vb].program_status = WL_ING;
+            vb_insert(&source_vb_list, tmp_current_wl_source_vb, g_vb_status[tmp_current_wl_source_vb].erase_count);
+
+        } while (valid_pages_prepare_to_move < g_remaining_pages_to_wl + TOTAL_VB_PAGES); // remaining pages and one new vb size.
     }    
-    else 
+    else
     {
         // total do gc valid count
         unsigned int valid_pages_prepare_to_move = 0;
         unsigned int first_valid_page_count = 0;
-        unsigned int tmp_current_gc_source_vb_next = INVALID;
 
         // Get min valid count vb.
         unsigned int tmp_current_gc_source_vb = ftl_get_min_valid_count_vb();
@@ -343,6 +440,7 @@ int ftl_garbage_collection_new(int wear_leveling)
             return -1;
         }
 
+        // determine get new vb flag or not.
         first_valid_page_count = g_vb_status[tmp_current_gc_source_vb].valid_count;
         if (first_valid_page_count > g_remaining_pages_to_gc || g_remaining_pages_to_gc == 0) {
             need_get_vb = 1;
@@ -360,228 +458,89 @@ int ftl_garbage_collection_new(int wear_leveling)
             valid_pages_prepare_to_move += g_vb_status[tmp_current_gc_source_vb].valid_count;
             // check total gc pages more than remaining pages and one new vb size or not.
             if (need_get_vb) {
-                if (valid_pages_prepare_to_move >= g_remaining_pages_to_gc + TOTAL_VB_PAGES) { break; }
+                if (valid_pages_prepare_to_move > g_remaining_pages_to_gc + TOTAL_VB_PAGES) { break; }
             } else {
                 if (valid_pages_prepare_to_move > g_remaining_pages_to_gc) { break; }
             }
             
             g_vb_status[tmp_current_gc_source_vb].program_status = GC_ING;
-            vb_insert(&gc_source_vb_list, tmp_current_gc_source_vb, g_vb_status[tmp_current_gc_source_vb].erase_count);
+            vb_insert(&source_vb_list, tmp_current_gc_source_vb, g_vb_status[tmp_current_gc_source_vb].erase_count);
 
         } while (valid_pages_prepare_to_move < g_remaining_pages_to_gc + TOTAL_VB_PAGES); // remaining pages and one new vb size.
-    }
-    
-    // 3. source vb's valid page and data write to free vb.
-    // Target physical page to move on, move every valid pages to target free vb.
+    }    
 
     // Determine page is valid or not -> According P2L's logical address is same to L2P's logical page and physical's value.
-    unsigned int gc_src_vb_count = vb_count(&gc_source_vb_list);
-    for (unsigned int tmp_vb = 0; tmp_vb < gc_src_vb_count; tmp_vb++)
+    unsigned int src_vb_count = vb_count(&source_vb_list);
+    for (unsigned int tmp_vb = 0; tmp_vb < src_vb_count; tmp_vb++)
     {        
-        unsigned int tmp_current_gc_source_vb = vb_get(&gc_source_vb_list);
-        if (tmp_current_gc_source_vb == -1) {
+        unsigned int tmp_current_src_vb = vb_get(&source_vb_list);
+        if (tmp_current_src_vb == -1) {
             ftl_print_vb_status();
-            printf("[Fail] Get gc source vb fail !!!\n");
+            printf("[Fail] Get process source vb fail !!!\n");
             return -1;
         }
 
-        unsigned int gc_source_page_idx = tmp_current_gc_source_vb * TOTAL_VB_PAGES;
+        unsigned int tmp_src_page_idx = tmp_current_src_vb * TOTAL_VB_PAGES;
 
         for (unsigned int i = 0; i < TOTAL_VB_PAGES; i++) 
         {
-            unsigned int tmp_logical_idx = g_p2l_table[gc_source_page_idx + i].logical_page_address;
+            unsigned int tmp_logical_idx = g_p2l_table[tmp_src_page_idx + i].logical_page_address;
             unsigned int tmp_physical_idx = g_l2p_table[tmp_logical_idx].physical_page_address;
             
             // Detrermine is valid date or not，P2L mapping's logical addres is eual L2P's physical or not.
-            if (tmp_physical_idx == (gc_source_page_idx + i)) // valid page
+            if (tmp_physical_idx == (tmp_src_page_idx + i)) // valid page
             {
-                // When remaining pages is 0, get new vb to gc.
-                if (g_remaining_pages_to_gc == 0 && need_get_vb == 1) {
-                    g_vb_status[g_gc_target_vb].program_status = WRITTEN;
-                    if (ftl_get_new_vb_to_gc() < 0) {
-                        ftl_print_vb_status();
-                        printf("[Fail][ftl_get_new_vb_to_gc] Get new gc target vb fail !!!\n");
-                        return -1;
-                    }                                        
-                }
+                if (wear_leveling == 1)
+                {
+                    // When remaining pages is 0, get new vb to wl.
+                    if (g_remaining_pages_to_wl == 0 && need_get_vb == 1) {
+                        if (g_wl_target_vb != INVALID) {
+                            g_vb_status[g_wl_target_vb].program_status = WRITTEN;
+                        }                        
+                        
+                        if (ftl_get_new_vb_to_wl() < 0) {
+                            ftl_print_vb_status();
+                            printf("[Fail][ftl_get_new_vb_to_wl] Get new wl target vb fail !!!\n");
+                            return -1;
+                        }
+                    }
 
-                unsigned int gc_target_page_idx = (g_gc_target_vb * TOTAL_VB_PAGES) + (TOTAL_VB_PAGES - g_remaining_pages_to_gc);
+                    // move valid page to target page.
+                    ftl_process_page(tmp_physical_idx, g_wl_target_vb, &g_remaining_pages_to_wl);
 
-                // Load physical data (Source)，Move to target's VB page.
-                // modify by use same P2L update flow.
-                g_p2l_table[gc_target_page_idx].logical_page_address = tmp_logical_idx;
-                g_p2l_table[gc_target_page_idx].data = g_p2l_table[tmp_physical_idx].data;
-                g_p2l_table[gc_target_page_idx].logical_address_write_count = g_p2l_table[tmp_physical_idx].logical_address_write_count;
-                g_p2l_table[gc_target_page_idx].physical_page_write_count++;
-                // Update L2P Table to new Physical Page Address.
-                g_l2p_table[tmp_logical_idx].physical_page_address = gc_target_page_idx;
-                // update VBStatus Table, Write Data for valid page + 1
-                g_vb_status[g_gc_target_vb].valid_count++;
-                // Increse nand write count.
-                g_nand_write_size++;
-                // update VBStatus Table, Original nand Data for valid page - 1
-                g_vb_status[tmp_current_gc_source_vb].valid_count--;
-                
-                g_remaining_pages_to_gc--;
+                } else { // GC flow
+                    // When remaining pages is 0, get new vb to gc.
+                    if (g_remaining_pages_to_gc == 0 && need_get_vb == 1) {
+                        if (g_gc_target_vb != INVALID) {
+                            g_vb_status[g_gc_target_vb].program_status = WRITTEN;
+                        }
+                        
+                        if (ftl_get_new_vb_to_gc() < 0) {
+                            ftl_print_vb_status();
+                            printf("[Fail][ftl_get_new_vb_to_gc] Get new gc target vb fail !!!\n");
+                            return -1;
+                        }
+                    }
 
-                // gc_target_page_idx++;
-                // valid_pages_moved++;
+                    // move valid page to target page.
+                    ftl_process_page(tmp_physical_idx, g_gc_target_vb, &g_remaining_pages_to_gc);
+
+                }                                
             }
         }
 
         // --------------------------------------------------------------------------------------------
         // 4. Erase this VB.
-        ftl_erase_vb(tmp_current_gc_source_vb);
-        printf("[Done] Do gc flow done and release vb: %u\n", tmp_current_gc_source_vb);
+        ftl_erase_vb(tmp_current_src_vb);
+        if (wear_leveling == 1) {
+            printf("[Done] Do wl flow done and release vb: %u\n", tmp_current_src_vb);
+        } else {
+            printf("[Done] Do gc flow done and release vb: %u\n", tmp_current_src_vb);
+        }                
     }    
 
     return 0;
 }
-
-// GC Purpose: Find Next Free VB to write.
-// 0. Wear-leveling
-// 1. Find Erase target VB (Source VB): Minimal Valid Count.
-// 2. target VB -> OP space or VBStatus[].validPage is 0  VB.
-// 3. Write OP Space (Target New VB) -> this VB is newest Free Target VB.
-// 4. Erase Source VB -> Erase Count + 1.
-// int ftl_garbage_collection(unsigned int wear_leveling)
-// {
-//     // Minimal valid count on vb, default is vb's pages
-//     unsigned int min_valid_count = TOTAL_VB_PAGES;
-//     // Minimal Erase count on vb, default is INVALID
-//     unsigned int min_erase_count = INVALID;
-//     // Source VB index, find needs GC's source block
-//     unsigned int gc_source_vb = INVALID; //target block to erase.
-//     // Find moveing on table.
-//     // unsigned int gc_target_vb = INVALID; //target block to move on (empty).
-
-//     // Declare gc vb list. 
-//     vb_list_t gc_source_vb_list;
-//     vb_initialize(&gc_source_vb_list);
-
-//     // total do gc valid count
-//     unsigned int total_gc_valid_count = 0;
-
-//     // --------------------------------------------------------------------------------------------
-//     // Find source vbs
-//     // 1: [Wear Leveling] select Source VB -> find Minimal Erase Count VB.    
-//     if (wear_leveling == 1) {        
-//         // Search all vb status
-//         for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
-//             // Search written vb
-//             if (g_vb_status[i].program_status == WRITTEN) {
-//                 if (g_vb_status[i].erase_count < min_erase_count) {
-//                     min_erase_count = g_vb_status[i].erase_count;
-//                     gc_source_vb = i;
-//                 }
-//             }
-//         }        
-//     }
-//     // 0: [Common GC] select Source VB -> find Minimal Valid Count VB.
-//     else 
-//     { // Common GC FG Flow: find min erase count
-//         do {
-//             // initial parameters.
-//             gc_source_vb = INVALID;
-//             min_valid_count = TOTAL_VB_PAGES;
-//             // Search all vb status
-//             for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {                    
-//                 // Search written vb
-//                 if (g_vb_status[i].program_status == WRITTEN) {
-//                     if (g_vb_status[i].valid_count <= min_valid_count) {
-//                         min_valid_count = g_vb_status[i].valid_count;
-//                         gc_source_vb = i;
-//                     }
-//                 }
-//             }
-            
-//             total_gc_valid_count += g_vb_status[gc_source_vb].valid_count;
-//             // check total gc pages more than one vb size or not.
-//             if (total_gc_valid_count >= TOTAL_VB_PAGES) {
-//                 break;
-//             }
-            
-//             g_vb_status[gc_source_vb].program_status = GCING;
-//             vb_insert(&gc_source_vb_list, gc_source_vb, g_vb_status[gc_source_vb].erase_count);
-
-//         } while (total_gc_valid_count < TOTAL_VB_PAGES);
-//     }
-    
-//     // 3. source vb's valid page and data write to free vb.    
-//     // Target physical page to move on, move every valid pages to target free vb.
-//     // unsigned int gc_target_page_idx = gc_target_vb * TOTAL_VB_PAGES;
-    
-//     unsigned int remaining_pages_to_gc = TOTAL_VB_PAGES;
-//     unsigned int gc_target_vb = vb_get(&g_free_vb_list);
-//     if (gc_target_vb == -1) {
-//         ftl_print_vb_status();
-//     }
-
-//     unsigned int gc_src_vb_count = vb_count(&gc_source_vb_list);
-
-//     // Determine page is valid or not -> According P2L's logical address is same to L2P's logical page and physical's value.
-    
-//     for (unsigned int vbs = 0; vbs < gc_src_vb_count; vbs++)
-//     {        
-//         gc_source_vb = vb_get(&gc_source_vb_list);
-//         if (gc_source_vb == -1) {
-//             ftl_print_vb_status();
-//         }
-
-//         unsigned int gc_source_page_idx = gc_source_vb * TOTAL_VB_PAGES;
-
-//         for (unsigned int i = 0; i < TOTAL_VB_PAGES; i++) {
-//             unsigned int tmp_logical_idx = g_p2l_table[gc_source_page_idx + i].logical_page_address;
-//             unsigned int tmp_physical_idx = g_l2p_table[tmp_logical_idx].physical_page_address;
-            
-//             // Detrermine is valid date or not，P2L mapping's logical addres is eual L2P's physical or not.
-//             if (tmp_physical_idx == (gc_source_page_idx + i))
-//             {                
-//                 unsigned int gc_target_page_idx = (gc_target_vb * TOTAL_VB_PAGES) + (TOTAL_VB_PAGES - remaining_pages_to_gc);
-
-//                 // Load physical data (Source)，Move to target's VB page.
-//                 // modify by use same P2L update flow.
-//                 g_p2l_table[gc_target_page_idx].logical_page_address = tmp_logical_idx;
-//                 g_p2l_table[gc_target_page_idx].data = g_p2l_table[tmp_physical_idx].data;
-//                 g_p2l_table[gc_target_page_idx].logical_address_write_count = g_p2l_table[tmp_physical_idx].logical_address_write_count;
-//                 g_p2l_table[gc_target_page_idx].physical_page_write_count++;
-//                 // Update L2P Table to new Physical Page Address.
-//                 g_l2p_table[tmp_logical_idx].physical_page_address = gc_target_page_idx;
-//                 // update VBStatus Table, Write Data for valid page + 1
-//                 g_vb_status[gc_target_vb].valid_count++;
-//                 // update VBStatus Table, Original nand Data for valid page - 1
-//                 g_vb_status[gc_source_vb].valid_count--;
-                
-//                 remaining_pages_to_gc--;
-
-//                 // gc_target_page_idx++;
-//                 // valid_pages_moved++;
-//             }
-//         }
-
-//         // --------------------------------------------------------------------------------------------
-//         // 4. Erase this VB.
-//         ftl_erase_vb(gc_source_vb);
-//         // Increase gc counts.
-//         g_total_gc_count++;
-//     }
-
-//     // Assign gc target status to WRITTEN.
-//     g_vb_status[gc_target_vb].program_status = WRITTEN;
-
-//     // Update write target VB and Free Page Count.
-//     g_writing_vb = vb_get(&g_free_vb_list);
-//     if (g_writing_vb == -1) {
-//         printf("[Fail] Can't find any free vb to write after gc !!!\n");
-//         ftl_print_vb_status();
-//         return -1;
-//     }
-//     g_vb_status[g_writing_vb].program_status = WRITING;    
-//     printf("[Done] Find new free vb in gc flow, the writing_vb is: %u\n", g_writing_vb);
-//     g_remaining_pages_to_write = TOTAL_VB_PAGES;
-
-//     return 0;
-// }
 
 // Read Data from Flash
 unsigned short ftl_read_data_flow(unsigned int logical_page, unsigned int length) {
@@ -598,11 +557,24 @@ unsigned short ftl_read_page_write_count(unsigned int logical_page) {
 // Display Virtual Block's Valid Count and Erase Count.
 void ftl_print_vb_status()
 {
+    g_max_erase_count = ftl_calc_max_erase_count();    
+    g_min_erase_count = ftl_calc_min_erase_count();
+    g_avg_erase_count = ftl_calc_avg_erase_count();
+
     printf("==============================================================\n");
     printf("                   Virtual Block Status\n");
     printf("==============================================================\n");
 
-    static char* enum_status[] = {"IDLE", "WRITING", "WRITTEN", "GC_ING", "GC_TARGET"};
+    printf("Summary: \n");
+    printf("Total Erase Count: %u\n", g_total_erase_count);
+    printf("Max Erase Count: %u\n", g_max_erase_count);
+    printf("Min Erase Count: %u\n", g_min_erase_count);
+    printf("Avg Erase Count: %lf\n", g_avg_erase_count);
+    printf("Total GC Count: %u\n", g_total_gc_count);
+    printf("Total WL Count: %u\n", g_total_wl_count);
+    printf("\n");
+
+    static char* enum_status[] = {"IDLE", "WRITING", "WRITTEN", "GC_ING", "GC_TARGET", "WL_ING", "WL_TARGET"};
     for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
         printf("VB: %u, Valid Count = %u, Erase Count = %u, Status = %s\n", \
         i, g_vb_status[i].valid_count, g_vb_status[i].erase_count, enum_status[g_vb_status[i].program_status]);
@@ -642,15 +614,17 @@ int ftl_write_waf_record_to_csv(char* test_case, waf_records_t* record, unsigned
     return 0;
 }
 
-int ftl_write_vb_table_detail_to_csv()
+int ftl_write_vb_table_detail_to_csv(char* test_case)
 {
     // Format file name reference date and time.
     time_t now = time(NULL); // Get current time
     struct tm *t = localtime(&now); // localization time
     char filename[64];    
-    snprintf(filename, sizeof(filename), "./P2L-Table_%04d%02d%02d_%02d%02d%02d.csv",
-             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-             t->tm_hour, t->tm_min, t->tm_sec);
+    snprintf(filename, sizeof(filename), "./P2L-Table_%s_OP_%02d_%04d%02d%02d_%02d%02d%02d.csv",
+                test_case, OP_SIZE,
+                t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+                t->tm_hour, t->tm_min, t->tm_sec
+            );
 
     FILE *file = fopen(filename, "w");
     if (file == NULL) {
@@ -680,26 +654,39 @@ int ftl_write_vb_table_detail_to_csv()
         else {                
             pages_valid_status[i] = 0;            
         }
-    }
-
-    // Calc WAF
-    double waf = (double)g_nand_write_size/g_host_write_size;
+    }        
 
     // Write Summary
-    fprintf(file, ",WAF:,%lf",waf);
-    fprintf(file, ",,,,Total Valid Pages:,%u", total_valid_pages);
-    fprintf(file, "\n");
-    fprintf(file, "\n");
+    g_max_erase_count = ftl_calc_max_erase_count();    
+    g_min_erase_count = ftl_calc_min_erase_count();
+    g_avg_erase_count = ftl_calc_avg_erase_count();
 
-    fprintf(file, "VB No,Valid Count,Erase Count");
-    fprintf(file, "\n");
+    fprintf(file, "Test Summary\n"); // Summary
+    fprintf(file, "Block per die: ,%u\n", BLOCKS_PER_DIE);
+    fprintf(file, "Total VB (single unit) pages: ,%u\n", TOTAL_VB_PAGES);
+    fprintf(file, "Total Pages: ,%u\n", TOTAL_PAGES);
+    fprintf(file, "OP Size: ,%u\n", OP_SIZE);
+    fprintf(file, "Host write range: ,%u\n", g_host_write_range);
+    fprintf(file, "Total Erase Count is: ,%u\n", g_total_erase_count);
+
+    fprintf(file, "Max Erase Count: ,%u\n", g_max_erase_count);
+    fprintf(file, "Min Erase Count: ,%u\n", g_min_erase_count);
+    fprintf(file, "Avg Erase Count: ,%lf\n", g_avg_erase_count);
+
+    fprintf(file, "Total GC Count is: ,%u\n", g_total_gc_count);
+    fprintf(file, "Total WL Count is: ,%u\n", g_total_wl_count);
+
+    // WAF Value, Calc WAF
+    double waf = (double)g_nand_write_size/g_host_write_size;
+    fprintf(file, "WAF is: ,%lf\n\n", waf);            
+
+    fprintf(file, "VB No,Valid Count,Erase Count\n");
     for (unsigned int i = 0; i < BLOCKS_PER_DIE; i++) {
         fprintf(file, "%u,%u,%u", i, g_vb_status[i].valid_count, g_vb_status[i].erase_count);
         fprintf(file, "\n");
     }
         
-    fprintf(file, "\n");
-    fprintf(file, "\n");
+    fprintf(file, "\n\n");
     
     // Write excel title.
     fprintf(file, "Physical Page Address,Logical Page Address,Data,LCA_Counts,Nand_WriteCounts,Valid_Page\n");
@@ -722,4 +709,61 @@ int ftl_write_vb_table_detail_to_csv()
     free(pages_valid_status);
 
     return 0;
+}
+
+int ftl_compare_write_data(host_write_data_t* write_golden_data, unsigned int data_size)
+{
+    int compare_result = 0;
+    unsigned short* temp_data = (unsigned short*)malloc(data_size * sizeof(unsigned short));
+    unsigned short* temp_write_count = (unsigned short*)malloc(data_size * sizeof(unsigned short));
+    unsigned int i = 0;    
+    // --------------------------------------------------------------------------------------------
+    // Read data from flash to temp buffer.
+    for (i; i < data_size; i++) {
+        temp_data[i] = ftl_read_data_flow(i, 1);
+        temp_write_count[i] = ftl_read_page_write_count(i);
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Compare to golden buffer table.
+    for (i; i < data_size; i++) {
+        if  (temp_data[i] != write_golden_data[i].data) {
+            printf("[Fail] Data Compare Fail in LCA: %u, Data Read: %hu, Golden Data: %hu\n", \
+            i, temp_data[i], write_golden_data[i].data);
+            compare_result = -1;
+        }
+
+        if  (temp_write_count[i] != write_golden_data[i].logical_write_count) {
+            printf("[Fail] Write Counts Compare Fail in LCA: %u, Data Read: %hu, Golden Data: %hu\n", \
+            i, temp_write_count[i], write_golden_data[i].logical_write_count);            
+            compare_result = -2;
+        }
+    }
+
+    free(temp_data);
+    free(temp_write_count);
+
+    return compare_result;
+}
+
+// move valid page to target page for wl or gc.
+void ftl_process_page(unsigned int src_page_idx, unsigned int target_vb, unsigned int* remaining_pages) 
+{
+    unsigned int target_page_idx = (target_vb * TOTAL_VB_PAGES) + (TOTAL_VB_PAGES - *remaining_pages);
+
+    unsigned int logical_idx = g_p2l_table[src_page_idx].logical_page_address;
+    unsigned int physical_idx = g_l2p_table[logical_idx].physical_page_address;
+
+    g_p2l_table[target_page_idx].logical_page_address = logical_idx;
+    g_p2l_table[target_page_idx].data = g_p2l_table[physical_idx].data;
+    g_p2l_table[target_page_idx].logical_address_write_count = g_p2l_table[physical_idx].logical_address_write_count;
+    g_p2l_table[target_page_idx].physical_page_write_count++;
+
+    g_l2p_table[logical_idx].physical_page_address = target_page_idx;
+    g_vb_status[target_vb].valid_count++;
+    g_nand_write_size++;
+    g_vb_status[src_page_idx / TOTAL_VB_PAGES].valid_count--;
+    (*remaining_pages)--;
+
+    return;
 }

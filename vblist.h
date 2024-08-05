@@ -47,4 +47,9 @@ vb_node_t*      vb_search_first(vb_list_t* list);
 // Print all the vb list info.
 void            vb_print_list(vb_list_t* list);
 
+// Bubble sort
+void            vb_bubble_sort(vb_list_t* list);
+// Swap node
+void            vb_swap(vb_node_t* a, vb_node_t* b);
+
 #endif //FTL_H

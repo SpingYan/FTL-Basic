@@ -155,3 +155,42 @@ void vb_print_list(vb_list_t* list)
         current = current->next;
     }
 }
+
+//-----------------------------------------------
+// swap
+void vb_swap(vb_node_t* a, vb_node_t* b)
+{
+    unsigned int temp = a->erase_count;
+    a->erase_count = b->erase_count;
+    b->erase_count = temp;
+}
+
+//-----------------------------------------------
+// bubble sort
+void vb_bubble_sort(vb_list_t* list)
+{
+    if (list->head == NULL) {
+        return;
+    }
+    
+    int swapped;
+    vb_node_t* ptr1;
+    vb_node_t* lptr = NULL;
+
+    do
+    {
+        swapped = 0;
+        ptr1 = list->head;
+
+        while (ptr1->next != lptr)
+        {
+            if (ptr1->erase_count < ptr1->next->erase_count) {
+                vb_swap(ptr1, ptr1->next);
+                swapped = 1;
+            }
+            ptr1 = ptr1->next;
+        }
+        lptr = ptr1;
+                
+    } while (swapped);
+}

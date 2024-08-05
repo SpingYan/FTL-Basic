@@ -39,19 +39,25 @@ filenames = [
     './Bin/WAF_RND_OP_28.csv', 
     './Bin/WAF_SEQ_OP_28.csv', 
     './Bin/WAF_POS_OP_28.csv', 
+    './Bin/WAF_RND_OP_35.csv', 
+    './Bin/WAF_SEQ_OP_35.csv', 
+    './Bin/WAF_POS_OP_35.csv', 
     # 可以繼續添加更多檔案路徑
 ]
 
 labels = [
-    'RND_OP_7%', 
-    'SEQ_OP_7%', 
+    'RND_OP_7%',
+    'SEQ_OP_7%',
     'POS_OP_7%',
-    'RND_OP_14%', 
-    'SEQ_OP_14%', 
+    'RND_OP_14%',
+    'SEQ_OP_14%',
     'POS_OP_14%',
-    'RND_OP_28%', 
-    'SEQ_OP_28%', 
+    'RND_OP_28%',
+    'SEQ_OP_28%',
     'POS_OP_28%',
+    'RND_OP_35%',
+    'SEQ_OP_35%',
+    'POS_OP_35%',
     # 對應的標籤
 ]
 
