@@ -10,12 +10,14 @@
           "request": "launch",
           "program": "${workspaceFolder}/bin/main.exe",
           "args": [],
-          "stopAtEntry": false,
+          "stopAtEntry": false,          
           "cwd": "C:/MinGW/bin",
+          //"cwd": "${fileDirname}", //macOS
           "environment": [],
           "externalConsole": true,
           "MIMode": "gdb",
           "miDebuggerPath": "C:\\MinGW\\bin\\gdb.exe",
+          //"miDebuggerPath": "${workspaceFolder}/bin/", //macOS
           "setupCommands": [
             {
               "description": "Enable pretty-printing for gdb",

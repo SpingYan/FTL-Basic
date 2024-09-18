@@ -29,8 +29,15 @@ typedef struct {
 void            vb_initialize(vb_list_t* list);
 // Insert a specific Index to linked list.
 void            vb_insert(vb_list_t* list, unsigned int vb_index, unsigned int erase_count);
+// Insert sort a specific Index to linked list.
+void            vb_insert_sort(vb_list_t* list, unsigned int vb_index, unsigned int erase_count);
 // Pop top ndoe in vb List
 int             vb_get(vb_list_t* list);
+// Pop min erase count ndoe in vb List
+int             vb_get_min_ec(vb_list_t* list);
+// Pop max erase count ndoe in vb List
+int             vb_get_max_ec(vb_list_t* list);
+
 // Count vb list count.
 unsigned int    vb_count(vb_list_t* list);
 
@@ -46,10 +53,5 @@ vb_node_t*      vb_search_min_erase_count(vb_list_t* list);
 vb_node_t*      vb_search_first(vb_list_t* list);
 // Print all the vb list info.
 void            vb_print_list(vb_list_t* list);
-
-// Bubble sort
-void            vb_bubble_sort(vb_list_t* list);
-// Swap node
-void            vb_swap(vb_node_t* a, vb_node_t* b);
 
 #endif //FTL_H

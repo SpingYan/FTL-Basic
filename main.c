@@ -7,10 +7,10 @@
 #include <windows.h>
 
 #include "ftl.h"
-#include "freeVB.h"
+#include "vblist.h"
 
-#define NUM_WRITES 10000
-#define NUM_LOOPS 100
+#define NUM_WRITES 1000000
+#define NUM_LOOPS 10000
 // #define HOST_WRITE_RANGE (PAGES_PER_BLOCK * TOTAL_DIES * BLOCKS_PER_DIE * OP_SIZE)
 #define HOST_WRITE_RANGE ((TOTAL_VB_PAGES * (BLOCKS_PER_DIE) * 100) / (100 + OP_SIZE))
 
@@ -44,7 +44,7 @@ void compare_data(host_write_data_t *write_golden_data, unsigned int data_size)
     int compare_result = ftl_compare_write_data(write_golden_data, g_host_write_range);
     if (compare_result == 0) {
         printf("[Sucess] Compared data done.\n");
-        printf("<-----\n");
+        printf("<-----\n");    
     } else if (compare_result == -1) {
         printf("[Fail] Data mismatch after write test !!!\n");
         system("pause");
@@ -62,7 +62,7 @@ int precondition_sequence_write(host_write_data_t *write_golden_data, unsigned i
         // increase write count.
         write_golden_data[i].logical_write_count++;
         // write data to flash.
-        ftl_write_data_flow(i, 1, write_golden_data[i].data, write_golden_data[i].logical_write_count);
+        ftl_write_data_flow_new(i, 1, write_golden_data[i].data, write_golden_data[i].logical_write_count);
     }
 
     return 0;
@@ -77,21 +77,21 @@ int sequence_write(host_write_data_t *write_golden_data, unsigned int start, uns
             // increase write count.
             write_golden_data[i].logical_write_count++;
             // write data to flash.
-            ftl_write_data_flow(i, 1, write_golden_data[i].data, write_golden_data[i].logical_write_count);                        
+            ftl_write_data_flow_new(i, 1, write_golden_data[i].data, write_golden_data[i].logical_write_count);                        
         }
 
         // Compare data
         compare_data(write_golden_data, g_host_write_range);
 
         // record waf value.
-        g_waf_record_data[loop].loop = loop;
+        g_waf_record_data[loop].loop = (loop+1)*100;
         g_waf_record_data[loop].nand_write = g_nand_write_size;
         g_waf_record_data[loop].host_write = g_host_write_size;
         g_waf_record_data[loop].waf = (double)g_nand_write_size/g_host_write_size;
 
         printf("=======================================================================================\n");
         printf("[Loop: %u] Sequence Write Test Done.\n", loop + 1);
-        printf("=======================================================================================\n");
+        printf("=======================================================================================\n");        
     }
 
     return 0;
@@ -119,18 +119,18 @@ int random_write(host_write_data_t *write_golden_data, unsigned int start, unsig
         unsigned int host_idx = start + (rand() % (random_write_range));
         // increase write count.
         write_golden_data[host_idx].logical_write_count++;
-        // write data to flash.
-        ftl_write_data_flow(host_idx, 1, write_golden_data[host_idx].data, write_golden_data[host_idx].logical_write_count);
+        // write data to flash.        
+        ftl_write_data_flow_new(host_idx, 1, write_golden_data[host_idx].data, write_golden_data[host_idx].logical_write_count);
         // Compare data
         compare_data(write_golden_data, g_host_write_range);
 
         if (loop == NUM_WRITES - 1 || (loop % 100 == 0 && loop != 0)) {
             
             unsigned int waf_idx = 0;
-            if (loop ==  NUM_WRITES - 1) { 
-                waf_idx = 99;
+            if (loop == NUM_WRITES - 1) {
+                waf_idx = NUM_LOOPS - 1;
             } else { 
-                waf_idx = loop/100 - 1; 
+                waf_idx = loop/100 - 1;
             }
 
             // Compare data
@@ -160,18 +160,24 @@ int single_point_write(host_write_data_t *write_golden_data, unsigned int write_
         // increase write count.
         write_golden_data[write_address].logical_write_count++;
         // write data to flash.
-        ftl_write_data_flow(write_address, 1, write_golden_data[write_address].data, write_golden_data[write_address].logical_write_count);
+        ftl_write_data_flow_new(write_address, 1, write_golden_data[write_address].data, write_golden_data[write_address].logical_write_count);
         // Compare data
         compare_data(write_golden_data, g_host_write_range);
 
-        if (loop == NUM_WRITES - 1 || (loop % 100 == 0 && loop != 0)) {
-            
+        if (loop == NUM_WRITES - 1 || (loop % 100 == 0 && loop != 0)) {            
             unsigned int waf_idx = 0;
-            if (loop ==  NUM_WRITES - 1) { 
-                waf_idx = 99;
+            if (loop == NUM_WRITES - 1) {
+                waf_idx = NUM_LOOPS - 1;
             } else { 
-                waf_idx = loop/100 - 1; 
+                waf_idx = loop/100 - 1;
             }
+
+            // unsigned int waf_idx = 0;
+            // if (loop ==  NUM_WRITES - 1) { 
+            //     waf_idx = 99;
+            // } else { 
+            //     waf_idx = loop/1000 - 1; 
+            // }
 
             // Compare data
             compare_data(write_golden_data, g_host_write_range);
@@ -333,6 +339,7 @@ int main(int argc, char **argv) {
         printf("----->\n");
 
         printf("[In-Progress] Comparing data......\n");
+        
         //Compare data.
         compare_data(write_golden_data, g_host_write_range);
                 
@@ -354,6 +361,8 @@ int main(int argc, char **argv) {
         printf("Total Erase Count is: %u\n", g_total_erase_count);
         // Total GC Count        
         printf("Total GC Count is: %u\n", g_total_gc_count);
+        // Total Segmental GC Count
+        printf("Total Segmental GC Count is: %u\n", g_segmental_gc_count);
         // Total WL Count
         printf("Total WL Count is: %u\n", g_total_wl_count);
         // WAF Value, Calc WAF

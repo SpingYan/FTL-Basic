@@ -1,9 +1,11 @@
 {
     "tasks": [
         {
-            "type": "cppbuild",
+            "type": "cppbuild",            
             "label": "C/C++: gcc.exe build active file",
             "command": "C:\\MinGW\\bin\\gcc.exe",
+            //"label": "C/C++: clang++ build active file", //macOS
+            //"command": "/usr/bin/clang++", //macOS
             "args": [                
                 "-g",
                 "${workspaceFolder}/main.c",
@@ -14,6 +16,7 @@
             ],
             "options": {
                 "cwd": "C:\\MinGW\\bin"
+                //"cwd": "${fileDirname}" //macOS
             },
             "problemMatcher": [
                 "$gcc"

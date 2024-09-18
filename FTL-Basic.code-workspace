@@ -10,7 +10,8 @@
 			"stdio.h": "c",
 			"functional": "c",
 			"time.h": "c",
-			"freevb.h": "c"
+			"freevb.h": "c",
+			"string.h": "c"
 		}
 	}
 }

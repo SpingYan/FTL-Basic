@@ -47,6 +47,37 @@ void vb_insert(vb_list_t* list, unsigned int vb_index, unsigned int erase_count)
 }
 
 //-----------------------------------------------
+// Insert sort a specific Index to linked list.
+void vb_insert_sort(vb_list_t* list, unsigned int vb_index, unsigned int erase_count)
+{
+    vb_node_t* newnode = vb_create_node(vb_index, erase_count);
+    newnode->next = NULL;
+    if (list->head == NULL) {
+        list->head = newnode;
+        return;
+    }
+    
+    vb_node_t* current = list->head;
+    vb_node_t* prev = NULL;
+
+    while (current != NULL && current->erase_count <= erase_count) {
+        prev = current;
+        current = current->next;
+    }
+
+    //insert node
+    newnode->next = current;
+
+    if (prev == NULL) {
+        list->head = newnode;
+    } else {
+        prev->next = newnode;
+    }
+
+    return;
+}
+
+//-----------------------------------------------
 // Delete a specific Index on linked list.
 void vb_delete(vb_list_t* list, unsigned int vb_index) 
 {
@@ -86,6 +117,53 @@ int vb_get(vb_list_t* list)
     free(top);
     
     return vb_index;
+}
+
+// Pop min erase count ndoe in vb List
+int vb_get_min_ec(vb_list_t* list)
+{
+    vb_node_t* top = list->head;
+    if (top == NULL) {
+        printf("[Fail] The vb list is empty !!!\n");
+        return -1;
+    }
+
+    int vb_index = top->vb_index;
+    list->head = top->next;
+    free(top);
+    
+    return vb_index;
+}
+
+// Pop max erase count ndoe in vb List
+int vb_get_max_ec(vb_list_t* list)
+{
+    if (list->head == NULL) {
+        printf("[Fail] The VB List is empty !!!\n");
+        return -1;
+    }
+
+    vb_node_t* current = list->head;
+    vb_node_t* prev = NULL;
+
+    // scan all the list.
+    while (current->next != NULL) {
+        prev = current;
+        current = current->next;
+    }
+
+    int vbIndex = current->vb_index;
+
+    // remove last node.
+    if (prev == NULL) {
+        list->head = NULL;
+    } else {
+        prev->next = NULL;
+    }
+    
+    free(current);
+    
+    return vbIndex;
 }
 
 //-----------------------------------------------
@@ -154,43 +232,4 @@ void vb_print_list(vb_list_t* list)
         printf("vb_index: %u, erase_count: %u\n", current->vb_index, current->erase_count);
         current = current->next;
     }
-}
-
-//-----------------------------------------------
-// swap
-void vb_swap(vb_node_t* a, vb_node_t* b)
-{
-    unsigned int temp = a->erase_count;
-    a->erase_count = b->erase_count;
-    b->erase_count = temp;
-}
-
-//-----------------------------------------------
-// bubble sort
-void vb_bubble_sort(vb_list_t* list)
-{
-    if (list->head == NULL) {
-        return;
-    }
-    
-    int swapped;
-    vb_node_t* ptr1;
-    vb_node_t* lptr = NULL;
-
-    do
-    {
-        swapped = 0;
-        ptr1 = list->head;
-
-        while (ptr1->next != lptr)
-        {
-            if (ptr1->erase_count < ptr1->next->erase_count) {
-                vb_swap(ptr1, ptr1->next);
-                swapped = 1;
-            }
-            ptr1 = ptr1->next;
-        }
-        lptr = ptr1;
-                
-    } while (swapped);
 }

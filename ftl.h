@@ -33,8 +33,8 @@ Flash Geomerty B17A
 // #define PAGE_SIZE 4096 //Bytes
 
 #define TOTAL_DIES 4 // total dies
-#define BLOCKS_PER_DIE 200 // blocks in 1 die
-#define PAGES_PER_BLOCK 9 // pages in 1 block
+#define BLOCKS_PER_DIE 2000 // blocks in 1 die : 200/500
+#define PAGES_PER_BLOCK 9 // pages in 1 block : 9/3
 #define PAGE_SIZE 16384 //Bytes
 
 #define BLOCK_SIZE (PAGES_PER_BLOCK * PAGE_SIZE) //Bytes
@@ -42,13 +42,16 @@ Flash Geomerty B17A
 #define TOTAL_BLOCKS (TOTAL_DIES * BLOCKS_PER_DIE)
 #define TOTAL_PAGES (TOTAL_BLOCKS * PAGES_PER_BLOCK)
 
-#define OP_SIZE 7 // Over Provisioning size
+#define OP_SIZE 28 // Over Provisioning size
 
 #define INVALID 0xFFFFFFFF
 #define INVALID_SHORT 0xFFFF
 #define INVALID_CHAR 0xFF
 
 #define GC_TRIGGER_VB_COUNT 9
+#define URGENT_GC_TRIGGER_VB_COUNT 3
+#define WRITE_AND_GC_SEGMENTATION 4
+#define SEGMENTAL_GC_PAGES 8
 
 //=====================================================================================================================
 // Normal FTL tables:
@@ -67,8 +70,8 @@ typedef struct {
     unsigned int physical_page_index;
     unsigned int logical_page_address;
     unsigned short data;
-    unsigned short logical_address_write_count; //logical address Write counts.
-    unsigned short physical_page_write_count; //Write this physical page counts.
+    unsigned int logical_address_write_count; //logical address Write counts.
+    unsigned int physical_page_write_count;   //Write this physical page counts.
 } physical_page_mapping_table_t;
 
 // WAF value records
@@ -89,6 +92,14 @@ typedef enum {
     WL_ING,
     WL_TARGET,
 } program_status_enum_t;
+
+// FTL Error enumerate list
+typedef enum {
+    OK,
+    CAN_NOT_FIND_VALID_VB,
+    CAN_NOT_FIND_FREE_VB,
+    NO_NEED_WL,
+} ftl_process_error_t;
 
 // Virtual Block Status: Record Virtual Block's valid Pages and erase count.
 typedef struct {
@@ -115,17 +126,32 @@ virtual_block_status_t g_vb_status[BLOCKS_PER_DIE];
 
 //===================================================================================================================== 
 // Global Varible
+
+
+// Wear-leveling
+unsigned int g_do_wl_flag;
+
+
 // Total Erase Count
 unsigned int g_total_erase_count;
 // Min Erase Count
 unsigned int g_min_erase_count;
 // Max Erase Count
 unsigned int g_max_erase_count;
+// Set do partition GC flow flag.
+unsigned int g_partition_gc_ing;
+// Set urgent GC flow flag.
+unsigned int g_urgent_gc_ing;
+
 // Avg Erase Count
 double g_avg_erase_count;
+// Last wl avg erase count
+double g_avg_erase_count_last_wl;
 
 // Total GC Count
 unsigned int g_total_gc_count;
+// Segmental GC Count
+unsigned int g_segmental_gc_count;
 // Total Wear-Leveling Count
 unsigned int g_total_wl_count;
 
@@ -143,6 +169,12 @@ unsigned int g_remaining_pages_to_write;
 unsigned int g_gc_target_vb;
 // record how many pages can be program (gc) on target VB.
 unsigned int g_remaining_pages_to_gc;
+
+// Current doing GC source VB index.
+unsigned int g_gc_source_vb;
+// record how many pages current moved from gc_source_vb
+unsigned int g_gc_current_page_in_vb;
+
 // Current doing WL target VB index.
 unsigned int g_wl_target_vb;
 // record how many pages can be program (wl) on target VB.
@@ -158,14 +190,16 @@ unsigned int g_host_write_size;
 void ftl_initialize();
 // Write Data to Flash
 int ftl_write_data_flow(unsigned int logical_page, unsigned int length, unsigned short data, unsigned short write_count);
+// Write Data to Flash
+int ftl_write_data_flow_new(unsigned int logical_page, unsigned int length, unsigned short data, unsigned int write_count);
 // When g_remaining_pages_to_write is 0, get new vb to write.
 int ftl_get_new_vb_to_write();
 // When g_remaining_pages_to_gc is 0, get new vb to GC.
 int ftl_get_new_vb_to_gc();
 // Read Data from Flash for single LCA.
-unsigned short ftl_read_data_flow(unsigned int logical_page, unsigned int length);
+unsigned int ftl_read_data_flow(unsigned int logical_page, unsigned int length);
 // Read LCA Counts from Flash for single LCA.
-unsigned short ftl_read_page_write_count(unsigned int logical_page);
+unsigned int ftl_read_page_write_count(unsigned int logical_page);
 // Save detail table and vb status to csv file.
 int ftl_write_vb_table_detail_to_csv(char* test_case);
 // Save waf value to csv file.
@@ -174,11 +208,17 @@ int ftl_write_waf_record_to_csv(char* test_case, waf_records_t* record, unsigned
 // Update L2P Table
 int ftl_update_table_L2P(unsigned int logical_page, unsigned int physical_page);
 // Update P2L Table
-int ftl_update_table_P2L(unsigned int physical_page, unsigned int logical_page, unsigned short data, unsigned short logical_address_write_count);
-// Do Garbage Collect Flow (wear-leveling = 0: Common GC, 1: Wear-Leveling)
-int ftl_garbage_collection_new(int gc_mode);
-// Do Garbage Collect Flow (wear-leveling = 0: Common GC, 1: Wear-Leveling)
-// int ftl_garbage_collection(unsigned int wear_leveling);
+int ftl_update_table_P2L(unsigned int physical_page, unsigned int logical_page, unsigned short data, unsigned int logical_address_write_count);
+// Update Data Flow
+int ftl_update_data(unsigned int logical_page, unsigned int length, unsigned short data, unsigned int logical_address_write_count);
+
+// Do Garbage Collect Flow
+int ftl_garbage_collection_new();
+// Do segmentation gc 
+int ftl_garbage_collection_segmentation(unsigned int gc_pages);
+// Do Wear Leveling Flow
+// int ftl_wear_leveling_new();
+int ftl_wear_leveling_new();
 
 // Determine do wear-leveling or not
 int ftl_determine_wear_leveling();
@@ -193,5 +233,22 @@ void ftl_print_vb_status();
 int ftl_compare_write_data(host_write_data_t* write_golden_data, unsigned int data_size);
 // move valid page to target page for wl or gc.
 void ftl_process_page(unsigned int src_page_idx, unsigned int target_vb, unsigned int* remaining_pages);
+
+// Get smart value
+unsigned int ftl_calc_min_erase_count();
+unsigned int ftl_calc_max_erase_count();
+double ftl_calc_avg_erase_count();
+
+void ftl_determine_and_do_wear_leveling();
+int ftl_do_wear_leveling_or_not();
+
+void ftl_initialize_vb_status();
+void ftl_initialize_global_l2p_table();
+void ftl_initialize_global_p2l_table();
+void ftl_initialize_free_vb_list();
+void ftl_initialize_global_smart_value();
+void ftl_initialize_write_related_parameters();
+void ftl_initialize_gc_related_parameters();
+void ftl_initialize_wl_related_parameters();
 
 #endif // FTL_H
