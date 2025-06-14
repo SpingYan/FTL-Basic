@@ -209,7 +209,7 @@ int main(int argc, char **argv) {
         printf("                             Start to Basic FTL Test\n");
         printf("=======================================================================================\n");
         printf("Please Select Test Pattern:\n");
-        printf("    0. Eixt.\n");
+        printf("    0. Exit.\n");
         printf("\n");
         printf("    1. Sequence Write. (Add a Sequence Write pattern that writes 0 to %u LCA in order for loops)\n", g_host_write_range - 1);
         printf("\n");
@@ -237,17 +237,17 @@ int main(int argc, char **argv) {
         switch (select)
         {
         case 1:        
-            printf("You select the [Sequence Write] Pattertn.\n");
+            printf("You select the [Sequence Write] Pattern.\n");
             testCase = 1;
             test_case = "SEQ";
             break;
         case 2:
-            printf("You select the [Random Write] Pattertn.\n");
+            printf("You select the [Random Write] Pattern.\n");
             testCase = 2;
             test_case = "RND";
             break;
         case 3:
-            printf("You select the [0 Position Write] Pattertn.\n");
+            printf("You select the [0 Position Write] Pattern.\n");
             testCase = 3;
             test_case = "POS";
             break;
@@ -257,7 +257,7 @@ int main(int argc, char **argv) {
             break;
         }
 
-        // There are no Test Case to Excute
+        // There are no Test Case to Execute
         if (testCase == 0) {
             continue;
         }
