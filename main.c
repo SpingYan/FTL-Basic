@@ -231,7 +231,7 @@ int main(int argc, char **argv) {
         }
 
         // initial waf record.
-        memset(g_waf_record_data, 0, NUM_LOOPS);
+        memset(g_waf_record_data, 0, NUM_LOOPS * sizeof(waf_records_t));
 
         char* test_case;
         switch (select)
