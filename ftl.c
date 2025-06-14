@@ -816,7 +816,7 @@ int ftl_write_vb_table_detail_to_csv(char* test_case)
     // Determine valid count or not.
     unsigned int total_pages = TOTAL_BLOCKS * PAGES_PER_BLOCK;// sizeof(g_p2l_table) / sizeof(g_p2l_table[0]);
     unsigned int* pages_valid_status = (unsigned int*)malloc(total_pages * sizeof(unsigned int));
-    memset(pages_valid_status, 0, total_pages);
+    memset(pages_valid_status, 0, total_pages * sizeof(unsigned int));
 
     unsigned int total_valid_pages = 0;    
     for (unsigned int i = 0; i < total_pages; i++) 
